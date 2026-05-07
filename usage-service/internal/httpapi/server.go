@@ -138,9 +138,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.collector.Status()
 	status.DeadLetters = deadLetters
+	dbPath := s.cfg.DBPath
+	if s.cfg.DBDriver == "postgres" {
+		dbPath = ""
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":     serviceID,
-		"dbPath":      s.cfg.DBPath,
+		"dbDriver":    s.cfg.DBDriver,
+		"dbPath":      dbPath,
 		"events":      events,
 		"deadLetters": deadLetters,
 		"collector":   status,

@@ -4,7 +4,7 @@
 
 这是面向 **CLI Proxy API（CPA）** 的单文件 Web 管理面板，并提供可选的 **Usage Service** 用于持久化请求统计。
 
-CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Service 消费 CPA 的用量队列，把请求级事件写入 SQLite，并向面板提供兼容的用量查询接口。
+CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Service 消费 CPA 的用量队列，默认把请求级事件写入 SQLite，也可配置写入 PostgreSQL，并向面板提供兼容的用量查询接口。
 
 - **CPA 主项目**: https://github.com/router-for-me/CLIProxyAPI
 - **推荐 CPA 版本**: >= v6.10.8
@@ -19,7 +19,7 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 ## 提供什么
 
 - 面向 CPA Management API（`/v0/management`）的单文件 React 管理面板
-- Docker 化 Usage Service，用 SQLite 持久化请求统计
+- Docker 化 Usage Service，用 SQLite 或 PostgreSQL 持久化请求统计
 - 两种部署模式：
   - **完整 Docker 方案**：访问 Usage Service 内置面板，登录时只填写 CPA 地址和 Management Key
   - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html`，然后在面板中配置单独部署的 Usage Service 地址
@@ -54,13 +54,13 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 浏览器
   -> Usage Service :18317
       -> 内置 management.html
-      -> /v0/management/usage 和 /v0/management/model-prices 从 SQLite 返回
+      -> /v0/management/usage 和 /v0/management/model-prices 从 Usage Service 数据库返回
       -> 其他 /v0/management/* 反代到 CPA
       -> HTTP/RESP 消费器 -> CPA API 端口
-      -> SQLite /data/usage.sqlite
+      -> SQLite /data/usage.sqlite 或配置的 PostgreSQL
 ```
 
-登录页会识别当前由 Usage Service 托管。你填写 CPA 地址和 Management Key 后，Usage Service 会验证 CPA Management API，保存设置到 SQLite，按配置的采集模式启动采集器（默认 `auto`：优先 HTTP 队列，旧版回退 RESP），并从同源提供完整管理面板。
+登录页会识别当前由 Usage Service 托管。你填写 CPA 地址和 Management Key 后，Usage Service 会验证 CPA Management API，保存设置到配置的数据库，按配置的采集模式启动采集器（默认 `auto`：优先 HTTP 队列，旧版回退 RESP），并从同源提供完整管理面板。
 
 ### CPA 控制面板方案
 
@@ -72,7 +72,7 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 
 Usage Service
   -> HTTP/RESP 消费器 -> CPA API 端口
-  -> SQLite /data/usage.sqlite
+  -> SQLite /data/usage.sqlite 或配置的 PostgreSQL
 ```
 
 当你希望保留 CPA 自动下载并托管面板的机制时，使用这个方案。单独部署 Usage Service，然后在「中心信息 -> 外部用量统计服务」中启用并填写地址。
@@ -194,8 +194,13 @@ docker compose -f docker-compose.usage.yml up --build
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `HTTP_ADDR` | `0.0.0.0:18317` | Usage Service HTTP 监听地址 |
+| `USAGE_DB_DRIVER` | `sqlite` | 存储驱动：`sqlite` 或 `postgres` |
 | `USAGE_DB_PATH` | `/data/usage.sqlite` | SQLite 数据库路径 |
 | `USAGE_DATA_DIR` | `/data` | 未覆盖 `USAGE_DB_PATH` 时的数据目录 |
+| `USAGE_DATABASE_URL` | 空 | `USAGE_DB_DRIVER=postgres` 时使用的 PostgreSQL DSN；Aiven URL 通常包含 `sslmode=require` |
+| `USAGE_DB_MAX_OPEN_CONNS` | `10` | PostgreSQL 最大打开连接数 |
+| `USAGE_DB_MAX_IDLE_CONNS` | `5` | PostgreSQL 最大空闲连接数 |
+| `USAGE_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | PostgreSQL 连接最长复用分钟数 |
 | `CPA_UPSTREAM_URL` | 空 | 可选 CPA 地址，用于无人值守启动 |
 | `CPA_MANAGEMENT_KEY` | 空 | 可选 CPA Management Key，用于无人值守启动 |
 | `CPA_MANAGEMENT_KEY_FILE` | `/run/secrets/cpa_management_key` | 可选密钥文件 |
@@ -211,11 +216,13 @@ docker compose -f docker-compose.usage.yml up --build
 
 如果设置了 `CPA_UPSTREAM_URL` 和 `CPA_MANAGEMENT_KEY`，服务启动后会自动开始采集。否则通过面板 setup 流程配置。
 
+使用 Aiven for PostgreSQL 时，启动容器时设置 `USAGE_DB_DRIVER=postgres`，并通过 `USAGE_DATABASE_URL` 传入 Aiven service URI，例如 `postgres://USER:PASSWORD@HOST:PORT/DB?sslmode=require`。已有 SQLite 数据不会自动迁移。
+
 ## 数据与安全说明
 
 - SQLite 数据存储在 `/data`，必须挂载到持久化 volume 或宿主机目录。
-- 完整 Docker 方案会把 CPA 地址和 Management Key 保存到 SQLite `settings` 表，用于容器重启后恢复采集。
-- 请保护 `/data` volume，它包含用量元数据和保存的 Management Key。
+- 完整 Docker 方案会把 CPA 地址和 Management Key 保存到配置的 Usage Service 数据库，用于容器重启后恢复采集。
+- 请保护 SQLite `/data` volume 或 PostgreSQL 凭据，它们包含用量元数据和保存的 Management Key。
 - Usage Service 会在保存 raw JSON 快照前脱敏疑似密钥字段，但请求元数据仍可能暴露模型、接口、账号标签和 token 用量。
 - RESP 队列是弹出式消费，不要让多个 Usage Service 同时消费同一个 CPA 实例。
 - 如果 Usage Service 停机超过 CPA 队列保留时间，该时段用量无法在不修改 CPA 的情况下恢复。
@@ -225,13 +232,13 @@ docker compose -f docker-compose.usage.yml up --build
 | 接口 | 用途 |
 |---|---|
 | `GET /health` | 基础健康检查 |
-| `GET /status` | 采集器、SQLite、事件数、错误状态 |
+| `GET /status` | 采集器、存储后端、事件数、错误状态 |
 | `GET /usage-service/info` | 让前端识别完整 Docker 方案 |
 | `POST /setup` | 保存 CPA 地址和 Management Key，并启动采集 |
 | `GET /v0/management/usage` | 面板兼容用量数据 |
 | `GET /v0/management/usage/export` | JSONL 导出用量事件 |
 | `POST /v0/management/usage/import` | 导入 JSONL 用量事件或旧版 JSON 快照 |
-| `GET /v0/management/model-prices` | 读取 SQLite 中保存的模型价格 |
+| `GET /v0/management/model-prices` | 读取 Usage Service 数据库中保存的模型价格 |
 | `PUT /v0/management/model-prices` | 替换已保存的模型价格 |
 | `POST /v0/management/model-prices/sync` | 从 LiteLLM 价格元数据同步模型价格 |
 | `GET /models`、`GET /v1/models` | setup 后将模型列表请求反代到 CPA |

@@ -17,9 +17,16 @@ import (
 
 func main() {
 	cfg := config.Load()
-	db, err := store.Open(cfg.DBPath)
+	db, err := store.OpenWithOptions(store.Options{
+		Driver:          cfg.DBDriver,
+		Path:            cfg.DBPath,
+		DatabaseURL:     cfg.DatabaseURL,
+		MaxOpenConns:    cfg.DBMaxOpenConns,
+		MaxIdleConns:    cfg.DBMaxIdleConns,
+		ConnMaxLifetime: cfg.DBConnMaxLifetime,
+	})
 	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
+		log.Fatalf("open store: %v", err)
 	}
 	defer db.Close()
 

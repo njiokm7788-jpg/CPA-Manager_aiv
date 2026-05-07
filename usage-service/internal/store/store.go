@@ -9,8 +9,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 
 	"github.com/seakee/cpa-manager/usage-service/internal/usage"
@@ -44,24 +46,86 @@ type ModelPriceSyncResult struct {
 	Skipped  int `json:"skipped"`
 }
 
+const (
+	DriverSQLite   = "sqlite"
+	DriverPostgres = "postgres"
+)
+
+type Options struct {
+	Driver          string
+	Path            string
+	DatabaseURL     string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect string
 }
 
 func Open(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+	return OpenWithOptions(Options{Driver: DriverSQLite, Path: path})
+}
+
+func OpenWithOptions(opts Options) (*Store, error) {
+	driver := normalizeDriver(opts.Driver)
+	var db *sql.DB
+	var err error
+
+	switch driver {
+	case DriverSQLite:
+		path := strings.TrimSpace(opts.Path)
+		if path == "" {
+			return nil, errors.New("sqlite database path is required")
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		db, err = sql.Open("sqlite", path)
+	case DriverPostgres:
+		dsn := strings.TrimSpace(opts.DatabaseURL)
+		if dsn == "" {
+			return nil, errors.New("USAGE_DATABASE_URL is required when USAGE_DB_DRIVER=postgres")
+		}
+		db, err = sql.Open("postgres", dsn)
+	default:
+		return nil, fmt.Errorf("unsupported usage database driver %q", opts.Driver)
 	}
-	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	if driver == DriverPostgres {
+		if opts.MaxOpenConns > 0 {
+			db.SetMaxOpenConns(opts.MaxOpenConns)
+		}
+		if opts.MaxIdleConns > 0 {
+			db.SetMaxIdleConns(opts.MaxIdleConns)
+		}
+		if opts.ConnMaxLifetime > 0 {
+			db.SetConnMaxLifetime(opts.ConnMaxLifetime)
+		}
+	}
+
+	store := &Store{db: db, dialect: driver}
 	if err := store.init(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+func normalizeDriver(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "", "sqlite":
+		return DriverSQLite
+	case "postgres", "postgresql", "pg":
+		return DriverPostgres
+	default:
+		return normalized
+	}
 }
 
 func (s *Store) Close() error {
@@ -72,16 +136,38 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) init() error {
-	statements := []string{
-		`pragma journal_mode = WAL`,
-		`pragma synchronous = FULL`,
-		`pragma busy_timeout = 5000`,
-		`pragma foreign_keys = ON`,
-		`create table if not exists usage_events (
-			id integer primary key autoincrement,
+	for _, statement := range s.initStatements() {
+		if _, err := s.db.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) initStatements() []string {
+	idColumn := "integer primary key autoincrement"
+	integerType := "integer"
+	realType := "real"
+	statements := []string{}
+	if s.dialect == DriverSQLite {
+		statements = append(statements,
+			`pragma journal_mode = WAL`,
+			`pragma synchronous = FULL`,
+			`pragma busy_timeout = 5000`,
+			`pragma foreign_keys = ON`,
+		)
+	} else {
+		idColumn = "bigserial primary key"
+		integerType = "bigint"
+		realType = "double precision"
+	}
+
+	statements = append(statements,
+		fmt.Sprintf(`create table if not exists usage_events (
+			id %s,
 			request_id text,
 			event_hash text not null unique,
-			timestamp_ms integer not null,
+			timestamp_ms %s not null,
 			timestamp text not null,
 			provider text,
 			model text not null,
@@ -93,51 +179,61 @@ func (s *Store) init() error {
 			source text,
 			source_hash text,
 			api_key_hash text,
-			input_tokens integer not null default 0,
-			output_tokens integer not null default 0,
-			reasoning_tokens integer not null default 0,
-			cached_tokens integer not null default 0,
-			cache_tokens integer not null default 0,
-			total_tokens integer not null default 0,
-			latency_ms integer,
+			input_tokens %s not null default 0,
+			output_tokens %s not null default 0,
+			reasoning_tokens %s not null default 0,
+			cached_tokens %s not null default 0,
+			cache_tokens %s not null default 0,
+			total_tokens %s not null default 0,
+			latency_ms %s,
 			failed integer not null default 0,
 			raw_json text,
-			created_at_ms integer not null
-		)`,
+			created_at_ms %s not null
+		)`, idColumn, integerType, integerType, integerType, integerType, integerType, integerType, integerType, integerType, integerType),
 		`create index if not exists idx_usage_events_timestamp on usage_events(timestamp_ms)`,
 		`create index if not exists idx_usage_events_request_id on usage_events(request_id)`,
 		`create index if not exists idx_usage_events_model on usage_events(model)`,
 		`create index if not exists idx_usage_events_auth_index on usage_events(auth_index)`,
 		`create index if not exists idx_usage_events_endpoint on usage_events(endpoint)`,
-		`create table if not exists dead_letter_events (
-			id integer primary key autoincrement,
+		fmt.Sprintf(`create table if not exists dead_letter_events (
+			id %s,
 			payload text not null,
 			error text not null,
-			created_at_ms integer not null
-		)`,
-		`create table if not exists settings (
+			created_at_ms %s not null
+		)`, idColumn, integerType),
+		fmt.Sprintf(`create table if not exists settings (
 			key text primary key,
 			value text not null,
-			updated_at_ms integer not null
-		)`,
-		`create table if not exists model_prices (
+			updated_at_ms %s not null
+		)`, integerType),
+		fmt.Sprintf(`create table if not exists model_prices (
 			model text primary key,
-			prompt_per_1m real not null,
-			completion_per_1m real not null,
-			cache_per_1m real not null,
+			prompt_per_1m %s not null,
+			completion_per_1m %s not null,
+			cache_per_1m %s not null,
 			source text,
 			source_model_id text,
 			raw_json text,
-			updated_at_ms integer not null,
-			synced_at_ms integer
-		)`,
+			updated_at_ms %s not null,
+			synced_at_ms %s
+		)`, realType, realType, realType, integerType, integerType),
+	)
+	return statements
+}
+
+func (s *Store) placeholder(index int) string {
+	if s.dialect == DriverPostgres {
+		return fmt.Sprintf("$%d", index)
 	}
-	for _, statement := range statements {
-		if _, err := s.db.Exec(statement); err != nil {
-			return err
-		}
+	return "?"
+}
+
+func (s *Store) placeholders(count int) string {
+	items := make([]string, count)
+	for index := range items {
+		items[index] = s.placeholder(index + 1)
 	}
-	return nil
+	return strings.Join(items, ", ")
 }
 
 func (s *Store) SaveSetup(ctx context.Context, setup Setup) error {
@@ -150,9 +246,9 @@ func (s *Store) SaveSetup(ctx context.Context, setup Setup) error {
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`insert into settings(key, value, updated_at_ms)
-		 values('setup', ?, ?)
-		 on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
+		fmt.Sprintf(`insert into settings(key, value, updated_at_ms)
+		 values('setup', %s, %s)
+		 on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`, s.placeholder(1), s.placeholder(2)),
 		string(data),
 		time.Now().UnixMilli(),
 	)
@@ -232,10 +328,10 @@ func (s *Store) SaveModelPrices(ctx context.Context, prices map[string]ModelPric
 		return tx.Commit()
 	}
 
-	stmt, err := tx.PrepareContext(ctx, `insert into model_prices (
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`insert into model_prices (
 		model, prompt_per_1m, completion_per_1m, cache_per_1m, source, source_model_id,
 		raw_json, updated_at_ms, synced_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) values (%s)`, s.placeholders(9)))
 	if err != nil {
 		return err
 	}
@@ -276,10 +372,10 @@ func (s *Store) UpsertSyncedModelPrices(ctx context.Context, prices map[string]M
 		_ = tx.Rollback()
 	}()
 
-	stmt, err := tx.PrepareContext(ctx, `insert into model_prices (
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`insert into model_prices (
 		model, prompt_per_1m, completion_per_1m, cache_per_1m, source, source_model_id,
 		raw_json, updated_at_ms, synced_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) values (%s)
 	on conflict(model) do update set
 		prompt_per_1m = excluded.prompt_per_1m,
 		completion_per_1m = excluded.completion_per_1m,
@@ -288,7 +384,7 @@ func (s *Store) UpsertSyncedModelPrices(ctx context.Context, prices map[string]M
 		source_model_id = excluded.source_model_id,
 		raw_json = excluded.raw_json,
 		updated_at_ms = excluded.updated_at_ms,
-		synced_at_ms = excluded.synced_at_ms`)
+		synced_at_ms = excluded.synced_at_ms`, s.placeholders(9)))
 	if err != nil {
 		return ModelPriceSyncResult{}, err
 	}
@@ -357,12 +453,18 @@ func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertR
 		_ = tx.Rollback()
 	}()
 
-	stmt, err := tx.PrepareContext(ctx, `insert or ignore into usage_events (
+	insertVerb := "insert or ignore into"
+	conflictClause := ""
+	if s.dialect == DriverPostgres {
+		insertVerb = "insert into"
+		conflictClause = " on conflict (event_hash) do nothing"
+	}
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`%s usage_events (
 		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, total_tokens,
 		latency_ms, failed, raw_json, created_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) values (%s)%s`, insertVerb, s.placeholders(24), conflictClause))
 	if err != nil {
 		return InsertResult{}, err
 	}
@@ -420,7 +522,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertR
 func (s *Store) AddDeadLetter(ctx context.Context, payload string, parseErr error) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`insert into dead_letter_events(payload, error, created_at_ms) values(?, ?, ?)`,
+		fmt.Sprintf(`insert into dead_letter_events(payload, error, created_at_ms) values(%s)`, s.placeholders(3)),
 		payload,
 		parseErr.Error(),
 		time.Now().UnixMilli(),
@@ -432,14 +534,14 @@ func (s *Store) RecentEvents(ctx context.Context, limit int) ([]usage.Event, err
 	if limit <= 0 {
 		limit = 50000
 	}
-	rows, err := s.db.QueryContext(ctx, `select
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`select
 		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, total_tokens,
 		latency_ms, failed, raw_json, created_at_ms
 		from usage_events
 		order by timestamp_ms desc, id desc
-		limit ?`, limit)
+		limit %s`, s.placeholder(1)), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,11 @@ services:
       - "18317:18317"
     environment:
       HTTP_ADDR: "0.0.0.0:18317"
+      USAGE_DB_DRIVER: "sqlite"
       USAGE_DB_PATH: "/data/usage.sqlite"
+      # Aiven/PostgreSQL example:
+      # USAGE_DB_DRIVER: "postgres"
+      # USAGE_DATABASE_URL: "postgres://USER:PASSWORD@HOST:PORT/DB?sslmode=require"
       USAGE_COLLECTOR_MODE: "auto"
       USAGE_RESP_QUEUE: "usage"
       USAGE_RESP_POP_SIDE: "right"

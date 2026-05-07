@@ -4,7 +4,7 @@
 
 A single-file Web UI for **CLI Proxy API (CPA)** plus an optional **Usage Service** for persistent usage analytics.
 
-Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Usage Service that consumes the CPA usage queue, persists request events to SQLite, and exposes panel-compatible usage APIs.
+Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Usage Service that consumes the CPA usage queue, persists request events to SQLite by default or PostgreSQL when configured, and exposes panel-compatible usage APIs.
 
 - **CPA Main project**: https://github.com/router-for-me/CLIProxyAPI
 - **Recommended CPA version**: >= v6.10.8
@@ -19,7 +19,7 @@ Since v6.10.0, CPA no longer includes built-in usage statistics. This project no
 ## What This Provides
 
 - A single-file React management panel for CPA Management API (`/v0/management`)
-- A Dockerized Usage Service for SQLite-backed usage persistence
+- A Dockerized Usage Service for SQLite-backed or PostgreSQL-backed usage persistence
 - Two deployment modes:
   - **Full Docker mode**: open the built-in panel from Usage Service and only enter the CPA URL + Management Key
   - **CPA panel mode**: keep using CPA's `/management.html`, then configure a separately deployed Usage Service inside the panel
@@ -54,13 +54,13 @@ Request statistics require the CPA usage queue:
 Browser
   -> Usage Service :18317
       -> built-in management.html
-      -> /v0/management/usage and /v0/management/model-prices from SQLite
+      -> /v0/management/usage and /v0/management/model-prices from Usage Service DB
       -> other /v0/management/* proxied to CPA
       -> HTTP/RESP consumer -> CPA API port
-      -> SQLite /data/usage.sqlite
+      -> SQLite /data/usage.sqlite or configured PostgreSQL
 ```
 
-The login page detects that it is hosted by Usage Service. You enter the CPA URL and Management Key. Usage Service validates the CPA Management API, stores the setup in SQLite, starts the collector with the configured mode (`auto` by default: HTTP queue first, RESP fallback), and serves the panel from the same origin.
+The login page detects that it is hosted by Usage Service. You enter the CPA URL and Management Key. Usage Service validates the CPA Management API, stores the setup in the configured database, starts the collector with the configured mode (`auto` by default: HTTP queue first, RESP fallback), and serves the panel from the same origin.
 
 ### CPA Panel Mode
 
@@ -72,7 +72,7 @@ Browser
 
 Usage Service
   -> HTTP/RESP consumer -> CPA API port
-  -> SQLite /data/usage.sqlite
+  -> SQLite /data/usage.sqlite or configured PostgreSQL
 ```
 
 Use this when CPA still auto-downloads and serves the panel. Deploy Usage Service separately, then open **Management Center Info -> External Usage Service**, enable it, enter the Usage Service URL, and save.
@@ -194,8 +194,13 @@ Most users can configure CPA URL and Management Key from the panel. Environment 
 | Variable | Default | Description |
 |---|---:|---|
 | `HTTP_ADDR` | `0.0.0.0:18317` | Usage Service HTTP listen address |
+| `USAGE_DB_DRIVER` | `sqlite` | Storage driver: `sqlite` or `postgres` |
 | `USAGE_DB_PATH` | `/data/usage.sqlite` | SQLite database path |
 | `USAGE_DATA_DIR` | `/data` | Base data directory when `USAGE_DB_PATH` is not overridden |
+| `USAGE_DATABASE_URL` | empty | PostgreSQL DSN when `USAGE_DB_DRIVER=postgres`; Aiven URLs usually include `sslmode=require` |
+| `USAGE_DB_MAX_OPEN_CONNS` | `10` | Maximum open PostgreSQL connections |
+| `USAGE_DB_MAX_IDLE_CONNS` | `5` | Maximum idle PostgreSQL connections |
+| `USAGE_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | PostgreSQL connection lifetime in minutes |
 | `CPA_UPSTREAM_URL` | empty | Optional CPA base URL for unattended startup |
 | `CPA_MANAGEMENT_KEY` | empty | Optional CPA Management Key for unattended startup |
 | `CPA_MANAGEMENT_KEY_FILE` | `/run/secrets/cpa_management_key` | Optional file containing the Management Key |
@@ -211,11 +216,13 @@ Most users can configure CPA URL and Management Key from the panel. Environment 
 
 If `CPA_UPSTREAM_URL` and `CPA_MANAGEMENT_KEY` are set, collection starts automatically on boot. Otherwise, use the web panel setup flow.
 
+For Aiven for PostgreSQL, start the container with `USAGE_DB_DRIVER=postgres` and pass the Aiven service URI through `USAGE_DATABASE_URL`, for example `postgres://USER:PASSWORD@HOST:PORT/DB?sslmode=require`. Existing SQLite data is not migrated automatically.
+
 ## Data and Security Notes
 
 - SQLite data is stored under `/data`; mount it to persistent storage.
-- In full Docker mode, CPA URL and Management Key are stored in the SQLite `settings` table so collection can resume after restart.
-- Protect the `/data` volume. It contains usage metadata and the saved Management Key.
+- In full Docker mode, CPA URL and Management Key are stored in the configured Usage Service database so collection can resume after restart.
+- Protect the SQLite `/data` volume or PostgreSQL credentials. They contain usage metadata and the saved Management Key.
 - Usage Service redacts key-like fields before storing raw JSON payload snapshots, but request metadata may still expose models, endpoints, account labels, and token usage.
 - RESP queue consumption is pop-based. Do not run multiple Usage Service consumers against the same CPA instance.
 - If Usage Service is down longer than CPA's queue retention window, that period's usage cannot be recovered without CPA-side persistence.
@@ -225,13 +232,13 @@ If `CPA_UPSTREAM_URL` and `CPA_MANAGEMENT_KEY` are set, collection starts automa
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Basic health check |
-| `GET /status` | Collector, SQLite, event count, and error status |
+| `GET /status` | Collector, storage backend, event count, and error status |
 | `GET /usage-service/info` | Allows the frontend to detect full Docker mode |
 | `POST /setup` | Save CPA URL + Management Key and start collection |
 | `GET /v0/management/usage` | Compatible usage payload for the panel |
 | `GET /v0/management/usage/export` | Export usage events as JSONL |
 | `POST /v0/management/usage/import` | Import JSONL usage events or legacy JSON snapshots |
-| `GET /v0/management/model-prices` | Read SQLite-backed model pricing |
+| `GET /v0/management/model-prices` | Read Usage Service database-backed model pricing |
 | `PUT /v0/management/model-prices` | Replace saved model pricing |
 | `POST /v0/management/model-prices/sync` | Sync model prices from LiteLLM pricing metadata |
 | `GET /models`, `GET /v1/models` | Proxy model-list requests to CPA after setup |
