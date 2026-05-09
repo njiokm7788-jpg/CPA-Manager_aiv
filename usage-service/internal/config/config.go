@@ -1,12 +1,20 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const configEnvKey = "CPA_MANAGER_CONFIG"
+
+const defaultConfigName = "config.json"
+
+const defaultSecretFile = "/run/secrets/cpa_management_key"
 
 type Config struct {
 	HTTPAddr          string
@@ -29,28 +37,72 @@ type Config struct {
 	TLSSkipVerify     bool
 }
 
-func Load() Config {
-	dataDir := env("USAGE_DATA_DIR", "/data")
-	return Config{
-		HTTPAddr:          env("HTTP_ADDR", "0.0.0.0:18317"),
-		DBDriver:          normalizeDBDriver(env("USAGE_DB_DRIVER", "sqlite")),
-		DBPath:            env("USAGE_DB_PATH", filepath.Join(dataDir, "usage.sqlite")),
-		DatabaseURL:       env("USAGE_DATABASE_URL", ""),
-		DBMaxOpenConns:    envInt("USAGE_DB_MAX_OPEN_CONNS", 10),
-		DBMaxIdleConns:    envInt("USAGE_DB_MAX_IDLE_CONNS", 5),
-		DBConnMaxLifetime: time.Duration(envInt("USAGE_DB_CONN_MAX_LIFETIME_MINUTES", 30)) * time.Minute,
-		CPAUpstreamURL:    env("CPA_UPSTREAM_URL", ""),
-		ManagementKey:     readSecret("CPA_MANAGEMENT_KEY", "CPA_MANAGEMENT_KEY_FILE", "/run/secrets/cpa_management_key"),
-		CollectorMode:     normalizeCollectorMode(env("USAGE_COLLECTOR_MODE", "auto")),
-		Queue:             env("USAGE_RESP_QUEUE", "usage"),
-		PopSide:           env("USAGE_RESP_POP_SIDE", "right"),
-		BatchSize:         envInt("USAGE_BATCH_SIZE", 100),
-		PollInterval:      time.Duration(envInt("USAGE_POLL_INTERVAL_MS", 500)) * time.Millisecond,
-		QueryLimit:        envInt("USAGE_QUERY_LIMIT", 50000),
-		PanelPath:         env("PANEL_PATH", ""),
-		CORSOrigins:       splitCSV(env("USAGE_CORS_ORIGINS", "*")),
-		TLSSkipVerify:     envBool("USAGE_RESP_TLS_SKIP_VERIFY", false),
+type fileConfig struct {
+	HTTPAddr                 string   `json:"httpAddr,omitempty"`
+	DataDir                  string   `json:"dataDir,omitempty"`
+	DBDriver                 string   `json:"dbDriver,omitempty"`
+	DBPath                   string   `json:"dbPath,omitempty"`
+	DatabaseURL              string   `json:"databaseUrl,omitempty"`
+	DBMaxOpenConns           int      `json:"dbMaxOpenConns,omitempty"`
+	DBMaxIdleConns           int      `json:"dbMaxIdleConns,omitempty"`
+	DBConnMaxLifetimeMinutes int      `json:"dbConnMaxLifetimeMinutes,omitempty"`
+	CPAUpstreamURL           string   `json:"cpaUpstreamUrl,omitempty"`
+	ManagementKeyFile        string   `json:"managementKeyFile,omitempty"`
+	CollectorMode            string   `json:"collectorMode,omitempty"`
+	Queue                    string   `json:"queue,omitempty"`
+	PopSide                  string   `json:"popSide,omitempty"`
+	BatchSize                int      `json:"batchSize,omitempty"`
+	PollIntervalMS           int      `json:"pollIntervalMs,omitempty"`
+	QueryLimit               int      `json:"queryLimit,omitempty"`
+	PanelPath                string   `json:"panelPath,omitempty"`
+	CORSOrigins              []string `json:"corsOrigins,omitempty"`
+	TLSSkipVerify            bool     `json:"tlsSkipVerify,omitempty"`
+}
+
+func Load() (Config, error) {
+	cfgFile, cfgDir, err := loadFileConfig()
+	if err != nil {
+		return Config{}, err
 	}
+
+	dataDirFallback := "/data"
+	if cfgFile.DataDir != "" {
+		dataDirFallback = resolveConfigPath(cfgFile.DataDir, cfgDir)
+	} else if cfgDir != "" {
+		dataDirFallback = resolveConfigPath("./data", cfgDir)
+	}
+	dataDir := env("USAGE_DATA_DIR", dataDirFallback)
+
+	dbPathFallback := filepath.Join(dataDir, "usage.sqlite")
+	if !hasEnv("USAGE_DATA_DIR") && cfgFile.DBPath != "" {
+		dbPathFallback = resolveConfigPath(cfgFile.DBPath, cfgDir)
+	}
+
+	managementKeyFile := defaultSecretFile
+	if cfgFile.ManagementKeyFile != "" {
+		managementKeyFile = resolveConfigPath(cfgFile.ManagementKeyFile, cfgDir)
+	}
+
+	return Config{
+		HTTPAddr:          env("HTTP_ADDR", stringFallback(cfgFile.HTTPAddr, "0.0.0.0:18317")),
+		DBDriver:          normalizeDBDriver(env("USAGE_DB_DRIVER", stringFallback(cfgFile.DBDriver, "sqlite"))),
+		DBPath:            env("USAGE_DB_PATH", dbPathFallback),
+		DatabaseURL:       env("USAGE_DATABASE_URL", cfgFile.DatabaseURL),
+		DBMaxOpenConns:    envInt("USAGE_DB_MAX_OPEN_CONNS", intFallback(cfgFile.DBMaxOpenConns, 10)),
+		DBMaxIdleConns:    envInt("USAGE_DB_MAX_IDLE_CONNS", intFallback(cfgFile.DBMaxIdleConns, 5)),
+		DBConnMaxLifetime: time.Duration(envInt("USAGE_DB_CONN_MAX_LIFETIME_MINUTES", intFallback(cfgFile.DBConnMaxLifetimeMinutes, 30))) * time.Minute,
+		CPAUpstreamURL:    env("CPA_UPSTREAM_URL", cfgFile.CPAUpstreamURL),
+		ManagementKey:     readSecret("CPA_MANAGEMENT_KEY", "CPA_MANAGEMENT_KEY_FILE", managementKeyFile),
+		CollectorMode:     normalizeCollectorMode(env("USAGE_COLLECTOR_MODE", stringFallback(cfgFile.CollectorMode, "auto"))),
+		Queue:             env("USAGE_RESP_QUEUE", stringFallback(cfgFile.Queue, "usage")),
+		PopSide:           env("USAGE_RESP_POP_SIDE", stringFallback(cfgFile.PopSide, "right")),
+		BatchSize:         envInt("USAGE_BATCH_SIZE", intFallback(cfgFile.BatchSize, 100)),
+		PollInterval:      time.Duration(envInt("USAGE_POLL_INTERVAL_MS", intFallback(cfgFile.PollIntervalMS, 500))) * time.Millisecond,
+		QueryLimit:        envInt("USAGE_QUERY_LIMIT", intFallback(cfgFile.QueryLimit, 50000)),
+		PanelPath:         env("PANEL_PATH", resolveConfigPath(cfgFile.PanelPath, cfgDir)),
+		CORSOrigins:       splitCSV(env("USAGE_CORS_ORIGINS", strings.Join(sliceFallback(cfgFile.CORSOrigins, []string{"*"}), ","))),
+		TLSSkipVerify:     envBool("USAGE_RESP_TLS_SKIP_VERIFY", cfgFile.TLSSkipVerify),
+	}, nil
 }
 
 func normalizeDBDriver(value string) string {
@@ -65,6 +117,75 @@ func normalizeDBDriver(value string) string {
 	}
 }
 
+func loadFileConfig() (fileConfig, string, error) {
+	if configPath := strings.TrimSpace(os.Getenv(configEnvKey)); configPath != "" {
+		return readOrCreateFileConfig(configPath)
+	}
+
+	configPath, err := executableConfigPath()
+	if err != nil {
+		return fileConfig{}, "", err
+	}
+	cfg, cfgDir, ok, err := readFileConfig(configPath)
+	if err != nil || ok {
+		return cfg, cfgDir, err
+	}
+	if hasEnv("USAGE_DATA_DIR") || hasEnv("USAGE_DB_PATH") {
+		return fileConfig{}, "", nil
+	}
+	return createDefaultFileConfig(configPath)
+}
+
+func readOrCreateFileConfig(configPath string) (fileConfig, string, error) {
+	cfg, cfgDir, ok, err := readFileConfig(configPath)
+	if err != nil || ok {
+		return cfg, cfgDir, err
+	}
+	return createDefaultFileConfig(configPath)
+}
+
+func readFileConfig(configPath string) (fileConfig, string, bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fileConfig{}, filepath.Dir(configPath), false, nil
+		}
+		return fileConfig{}, filepath.Dir(configPath), false, fmt.Errorf("read config %s: %w", configPath, err)
+	}
+	var cfg fileConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fileConfig{}, filepath.Dir(configPath), false, fmt.Errorf("parse config %s: %w", configPath, err)
+	}
+	return cfg, filepath.Dir(configPath), true, nil
+}
+
+func createDefaultFileConfig(configPath string) (fileConfig, string, error) {
+	cfg := fileConfig{
+		HTTPAddr: "0.0.0.0:18317",
+		DataDir:  "./data",
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fileConfig{}, "", err
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return fileConfig{}, "", fmt.Errorf("create config directory %s: %w", filepath.Dir(configPath), err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		return fileConfig{}, "", fmt.Errorf("create default config %s: %w", configPath, err)
+	}
+	return cfg, filepath.Dir(configPath), nil
+}
+
+func executableConfigPath() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(executable), defaultConfigName), nil
+}
+
 func normalizeCollectorMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "http", "resp":
@@ -72,6 +193,10 @@ func normalizeCollectorMode(value string) string {
 	default:
 		return "auto"
 	}
+}
+
+func hasEnv(key string) bool {
+	return strings.TrimSpace(os.Getenv(key)) != ""
 }
 
 func env(key string, fallback string) string {
@@ -100,6 +225,36 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func stringFallback(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func intFallback(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func sliceFallback(value []string, fallback []string) []string {
+	if len(value) == 0 {
+		return fallback
+	}
+	return value
+}
+
+func resolveConfigPath(path string, baseDir string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) || baseDir == "" {
+		return path
+	}
+	return filepath.Join(baseDir, path)
 }
 
 func splitCSV(value string) []string {

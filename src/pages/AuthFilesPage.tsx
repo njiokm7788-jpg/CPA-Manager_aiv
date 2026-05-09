@@ -10,20 +10,26 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
 import { animate } from 'motion/mini';
 import type { AnimationPlaybackControlsWithThen } from 'motion-dom';
+import type { AuthFileItem, CodexQuotaState } from '@/types';
 import { useInterval } from '@/hooks/useInterval';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
-import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { IconFilterAll } from '@/components/ui/icons';
+import { IconFilterAll, IconSearch } from '@/components/ui/icons';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { copyToClipboard } from '@/utils/clipboard';
+import {
+  normalizePlanType,
+  resolveCodexChatgptAccountId,
+  resolveCodexPlanType,
+} from '@/utils/quota';
 import {
   MAX_CARD_PAGE_SIZE,
   MIN_CARD_PAGE_SIZE,
@@ -35,7 +41,6 @@ import {
   hasAuthFileStatusMessage,
   isRuntimeOnlyAuthFile,
   normalizeProviderKey,
-  parsePriorityValue,
   type QuotaProviderType,
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
@@ -50,14 +55,14 @@ import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth'
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { useAuthFilesStatusBarCache } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
 import {
-  isAuthFilesSortMode,
+  normalizeAuthFilesSortMode,
   readAuthFilesUiState,
   readPersistedAuthFilesCompactMode,
   writeAuthFilesUiState,
   writePersistedAuthFilesCompactMode,
   type AuthFilesSortMode,
 } from '@/features/authFiles/uiState';
-import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
+import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
 import styles from './AuthFilesPage.module.scss';
 
 const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
@@ -76,11 +81,93 @@ const buildWildcardSearch = (value: string): RegExp | null => {
   return new RegExp(pattern, 'i');
 };
 
+const PREMIUM_CODEX_PLAN_TYPES = new Set(['pro', 'prolite', 'pro-lite', 'pro_lite']);
+
+const compareAuthFileName = (left: { name: string }, right: { name: string }) =>
+  left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' });
+
+const stringifySearchValue = (value: unknown): string[] => {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value.flatMap(stringifySearchValue);
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)];
+  return [];
+};
+
+const getCodexPlanLabel = (
+  planType: string | null | undefined,
+  t: TFunction
+): string | null => {
+  const normalized = normalizePlanType(planType);
+  if (!normalized) return null;
+  if (normalized === 'pro') return t('codex_quota.plan_pro');
+  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') {
+    return t('codex_quota.plan_prolite');
+  }
+  if (normalized === 'plus') return t('codex_quota.plan_plus');
+  if (normalized === 'team') return t('codex_quota.plan_team');
+  if (normalized === 'free') return t('codex_quota.plan_free');
+  return planType || normalized;
+};
+
+const getAuthFilePlanType = (
+  file: AuthFileItem,
+  quota?: CodexQuotaState
+): string | null => resolveCodexPlanType(file) ?? quota?.planType ?? null;
+
+const getAuthFilePlanSortRank = (
+  file: AuthFileItem,
+  quota?: CodexQuotaState
+): number | null => {
+  const normalized = normalizePlanType(getAuthFilePlanType(file, quota));
+  if (!normalized) return null;
+  if (normalized === 'pro') return 50;
+  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') return 40;
+  if (normalized === 'team') return 30;
+  if (normalized === 'plus') return 20;
+  if (normalized === 'free') return 10;
+  return 0;
+};
+
+const getAuthFileSearchValues = (
+  file: AuthFileItem,
+  t: TFunction,
+  quota?: CodexQuotaState
+) => {
+  const planType = getAuthFilePlanType(file, quota);
+  const planLabel = getCodexPlanLabel(planType, t);
+  const accountId = resolveCodexChatgptAccountId(file);
+  const type = file.type || file.provider;
+
+  return [
+    file.name,
+    file.type,
+    file.provider,
+    type ? getTypeLabel(t, String(type)) : null,
+    file.authIndex,
+    file['auth_index'],
+    file.status,
+    file.state,
+    file.statusMessage,
+    file['status_message'],
+    file.error,
+    file.errorStatus,
+    file['error_status'],
+    quota?.status,
+    quota?.error,
+    quota?.errorStatus,
+    planType,
+    planLabel,
+    accountId,
+  ];
+};
+
 export function AuthFilesPage() {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
+  const codexQuota = useQuotaStore((state) => state.codexQuota);
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const navigate = useNavigate();
@@ -230,8 +317,9 @@ export function AuthFilesPage() {
         regular: regularPageSize,
         compact: compactPageSize,
       });
-      if (isAuthFilesSortMode(persisted.sortMode)) {
-        setSortMode(persisted.sortMode);
+      const persistedSortMode = normalizeAuthFilesSortMode(persisted.sortMode);
+      if (persistedSortMode) {
+        setSortMode(persistedSortMode);
       }
     }
 
@@ -318,8 +406,9 @@ export function AuthFilesPage() {
 
   const handleSortModeChange = useCallback(
     (value: string) => {
-      if (!isAuthFilesSortMode(value) || value === sortMode) return;
-      setSortMode(value);
+      const nextSortMode = normalizeAuthFilesSortMode(value);
+      if (!nextSortMode || nextSortMode === sortMode) return;
+      setSortMode(nextSortMode);
       setPage(1);
       void loadFiles().catch(() => {});
     },
@@ -369,8 +458,9 @@ export function AuthFilesPage() {
   const sortOptions = useMemo(
     () => [
       { value: 'default', label: t('auth_files.sort_default') },
-      { value: 'az', label: t('auth_files.sort_az') },
-      { value: 'priority', label: t('auth_files.sort_priority') },
+      { value: 'name-asc', label: t('auth_files.sort_name_asc') },
+      { value: 'plan-desc', label: t('auth_files.sort_plan_desc') },
+      { value: 'plan-asc', label: t('auth_files.sort_plan_asc') },
     ],
     [t]
   );
@@ -394,15 +484,17 @@ export function AuthFilesPage() {
       const matchType = filter === 'all' || item.type === filter;
       const matchSearch =
         !normalizedSearch ||
-        [item.name, item.type, item.provider].some((value) => {
-          const content = (value || '').toString();
-          return wildcardSearch
-            ? wildcardSearch.test(content)
-            : content.toLowerCase().includes(normalizedTerm);
-        });
+        stringifySearchValue(getAuthFileSearchValues(item, t, codexQuota[item.name])).some(
+          (value) => {
+            const content = value.toString();
+            return wildcardSearch
+              ? wildcardSearch.test(content)
+              : content.toLowerCase().includes(normalizedTerm);
+          }
+        );
       return matchType && matchSearch;
     });
-  }, [filesMatchingStatusFilters, filter, normalizedSearch, wildcardSearch]);
+  }, [codexQuota, filesMatchingStatusFilters, filter, normalizedSearch, t, wildcardSearch]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -412,19 +504,30 @@ export function AuthFilesPage() {
         const providerB = normalizeProviderKey(String(b.provider ?? b.type ?? 'unknown'));
         const providerCompare = providerA.localeCompare(providerB);
         if (providerCompare !== 0) return providerCompare;
-        return a.name.localeCompare(b.name);
+        return compareAuthFileName(a, b);
       });
-    } else if (sortMode === 'az') {
-      copy.sort((a, b) => a.name.localeCompare(b.name));
-    } else if (sortMode === 'priority') {
+    } else if (sortMode === 'name-asc') {
+      copy.sort(compareAuthFileName);
+    } else if (sortMode === 'plan-asc' || sortMode === 'plan-desc') {
       copy.sort((a, b) => {
-        const pa = parsePriorityValue(a.priority ?? a['priority']) ?? 0;
-        const pb = parsePriorityValue(b.priority ?? b['priority']) ?? 0;
-        return pb - pa; // 高优先级排前面
+        const leftRank = getAuthFilePlanSortRank(a, codexQuota[a.name]);
+        const rightRank = getAuthFilePlanSortRank(b, codexQuota[b.name]);
+        const leftKnown = leftRank !== null && leftRank !== undefined;
+        const rightKnown = rightRank !== null && rightRank !== undefined;
+
+        if (leftKnown || rightKnown) {
+          if (!leftKnown) return 1;
+          if (!rightKnown) return -1;
+          const rankDiff =
+            sortMode === 'plan-desc' ? rightRank - leftRank : leftRank - rightRank;
+          if (rankDiff !== 0) return rankDiff;
+        }
+
+        return compareAuthFileName(a, b);
       });
     }
     return copy;
-  }, [filtered, sortMode]);
+  }, [codexQuota, filtered, sortMode]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -583,54 +686,52 @@ export function AuthFilesPage() {
   );
 
   const renderFilterTags = () => (
-    <div className={styles.filterRail}>
-      <div className={styles.filterTags}>
-        {existingTypes.map((type) => {
-          const isActive = filter === type;
-          const iconSrc = getAuthFileIcon(type, resolvedTheme);
-          const color =
-            type === 'all'
-              ? { bg: 'var(--bg-tertiary)', text: 'var(--text-primary)' }
-              : getTypeColor(type, resolvedTheme);
-          const buttonStyle = {
-            '--filter-color': color.text,
-            '--filter-surface': color.bg,
-            '--filter-active-text': resolvedTheme === 'dark' ? '#111827' : '#ffffff',
-          } as CSSProperties;
+    <div className={styles.filterTags}>
+      {existingTypes.map((type) => {
+        const isActive = filter === type;
+        const iconSrc = getAuthFileIcon(type, resolvedTheme);
+        const color =
+          type === 'all'
+            ? { bg: 'var(--color-primary-light-9)', text: 'var(--primary-color)' }
+            : getTypeColor(type, resolvedTheme);
+        const buttonStyle = {
+          '--filter-color': color.text,
+          '--filter-surface': color.bg,
+          '--filter-active-text': resolvedTheme === 'dark' ? '#111827' : '#ffffff',
+        } as CSSProperties;
 
-          return (
-            <button
-              key={type}
-              className={`${styles.filterTag} ${isActive ? styles.filterTagActive : ''}`}
-              style={buttonStyle}
-              onClick={() => {
-                setFilter(type);
-                setPage(1);
-              }}
-            >
-              <span className={styles.filterTagLabel}>
-                {type === 'all' ? (
-                  <span className={`${styles.filterTagIconWrap} ${styles.filterAllIconWrap}`}>
-                    <IconFilterAll className={styles.filterAllIcon} size={16} />
-                  </span>
-                ) : (
-                  <span className={styles.filterTagIconWrap}>
-                    {iconSrc ? (
-                      <img src={iconSrc} alt="" className={styles.filterTagIcon} />
-                    ) : (
-                      <span className={styles.filterTagIconFallback}>
-                        {getTypeLabel(t, type).slice(0, 1).toUpperCase()}
-                      </span>
-                    )}
-                  </span>
-                )}
-                <span className={styles.filterTagText}>{getTypeLabel(t, type)}</span>
-              </span>
-              <span className={styles.filterTagCount}>{typeCounts[type] ?? 0}</span>
-            </button>
-          );
-        })}
-      </div>
+        return (
+          <button
+            key={type}
+            className={`${styles.filterTag} ${isActive ? styles.filterTagActive : ''}`}
+            style={buttonStyle}
+            onClick={() => {
+              setFilter(type);
+              setPage(1);
+            }}
+          >
+            <span className={styles.filterTagLabel}>
+              {type === 'all' ? (
+                <span className={`${styles.filterTagIconWrap} ${styles.filterAllIconWrap}`}>
+                  <IconFilterAll className={styles.filterAllIcon} size={16} />
+                </span>
+              ) : (
+                <span className={styles.filterTagIconWrap}>
+                  {iconSrc ? (
+                    <img src={iconSrc} alt="" className={styles.filterTagIcon} />
+                  ) : (
+                    <span className={styles.filterTagIconFallback}>
+                      {getTypeLabel(t, type).slice(0, 1).toUpperCase()}
+                    </span>
+                  )}
+                </span>
+              )}
+              <span className={styles.filterTagText}>{getTypeLabel(t, type)}</span>
+            </span>
+            <span className={styles.filterTagCount}>{typeCounts[type] ?? 0}</span>
+          </button>
+        );
+      })}
     </div>
   );
 
@@ -662,9 +763,9 @@ export function AuthFilesPage() {
         <p className={styles.description}>{t('auth_files.description')}</p>
       </div>
 
-      <Card
-        title={titleNode}
-        extra={
+      <section className={styles.authFilesShell}>
+        <div className={styles.authFilesHeader}>
+          <div className={styles.authFilesTitle}>{titleNode}</div>
           <div className={styles.headerActions}>
             <Button variant="secondary" size="sm" onClick={handleHeaderRefresh} disabled={loading}>
               {t('common.refresh')}
@@ -704,14 +805,13 @@ export function AuthFilesPage() {
               onChange={handleFileChange}
             />
           </div>
-        }
-      >
+        </div>
+
         {error && <div className={styles.errorBox}>{error}</div>}
 
         <div className={styles.filterSection}>
-          {renderFilterTags()}
-
-          <div className={styles.filterContent}>
+          <div className={styles.filterPanel}>
+            <div className={styles.filterPanelTags}>{renderFilterTags()}</div>
             <div className={styles.filterControlsPanel}>
               <div className={styles.filterControls}>
                 <div className={styles.filterItem}>
@@ -723,6 +823,8 @@ export function AuthFilesPage() {
                       setPage(1);
                     }}
                     placeholder={t('auth_files.search_placeholder')}
+                    rightElement={<IconSearch size={16} />}
+                    aria-label={t('auth_files.search_label')}
                   />
                 </div>
                 <div className={styles.filterItem}>
@@ -803,7 +905,9 @@ export function AuthFilesPage() {
                 </div>
               </div>
             </div>
+          </div>
 
+          <div className={styles.filterContent}>
             {loading ? (
               <div className={styles.hint}>{t('common.loading')}</div>
             ) : pageItems.length === 0 ? (
@@ -867,7 +971,7 @@ export function AuthFilesPage() {
             )}
           </div>
         </div>
-      </Card>
+      </section>
 
       <OAuthExcludedCard
         disableControls={disableControls}

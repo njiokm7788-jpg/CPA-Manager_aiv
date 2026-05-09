@@ -23,7 +23,6 @@ import { formatFileSize } from '@/utils/format';
 import {
   QUOTA_PROVIDER_TYPES,
   formatModified,
-  getAuthFileIcon,
   getAuthFileStatusMessage,
   getTypeColor,
   getTypeLabel,
@@ -92,7 +91,6 @@ export function AuthFileCard(props: AuthFileCardProps) {
   const showModelsButton = !isRuntimeOnly || isAistudio;
   const typeColor = getTypeColor(file.type || 'unknown', resolvedTheme);
   const typeLabel = getTypeLabel(t, file.type || 'unknown');
-  const providerIcon = getAuthFileIcon(file.type || 'unknown', resolvedTheme);
 
   const quotaType =
     quotaFilterType && resolveQuotaType(file) === quotaFilterType ? quotaFilterType : null;
@@ -158,22 +156,6 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 title={selected ? t('auth_files.batch_deselect') : t('auth_files.batch_select_all')}
               />
             )}
-            <div
-              className={styles.providerAvatar}
-              style={{
-                backgroundColor: typeColor.bg,
-                color: typeColor.text,
-                ...(typeColor.border ? { border: typeColor.border } : {}),
-              }}
-            >
-              {providerIcon ? (
-                <img src={providerIcon} alt="" className={styles.providerAvatarImage} />
-              ) : (
-                <span className={styles.providerAvatarFallback}>
-                  {typeLabel.slice(0, 1).toUpperCase()}
-                </span>
-              )}
-            </div>
             <div className={styles.cardHeaderContent}>
               <div className={styles.cardBadgeRow}>
                 <span
@@ -258,61 +240,61 @@ export function AuthFileCard(props: AuthFileCardProps) {
 
           <div className={styles.cardActions}>
             <div className={styles.cardActionsMain}>
-              {showModelsButton && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => onShowModels(file)}
-                  className={`${styles.primaryActionButton} ${styles.modelsActionButton}`}
-                  title={t('auth_files.models_button', { defaultValue: '模型' })}
-                  disabled={disableControls}
-                >
-                  <>
-                    <span className={styles.modelsActionIconWrap}>
-                      <IconModelCluster className={styles.actionIcon} size={16} />
-                    </span>
-                    <span className={styles.actionButtonLabel}>
-                      {t('auth_files.models_button', { defaultValue: '模型' })}
-                    </span>
-                  </>
-                </Button>
-              )}
-              {!isRuntimeOnly && (
+              {(showModelsButton || !isRuntimeOnly) && (
                 <div className={styles.cardUtilityActions}>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => onDownload(file.name)}
-                    className={styles.iconButton}
-                    title={t('auth_files.download_button')}
-                    disabled={disableControls}
-                  >
-                    <IconDownload className={styles.actionIcon} size={16} />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => onOpenPrefixProxyEditor(file)}
-                    className={styles.iconButton}
-                    title={t('auth_files.prefix_proxy_button')}
-                    disabled={disableControls}
-                  >
-                    <IconSettings className={styles.actionIcon} size={16} />
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => onDelete(file.name)}
-                    className={styles.iconButton}
-                    title={t('auth_files.delete_button')}
-                    disabled={disableControls || deleting === file.name}
-                  >
-                    {deleting === file.name ? (
-                      <LoadingSpinner size={14} />
-                    ) : (
-                      <IconTrash2 className={styles.actionIcon} size={16} />
-                    )}
-                  </Button>
+                  {showModelsButton && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onShowModels(file)}
+                      className={`${styles.primaryActionButton} ${styles.modelsActionButton}`}
+                      title={t('auth_files.models_button', { defaultValue: '模型' })}
+                      aria-label={t('auth_files.models_button', { defaultValue: '模型' })}
+                      disabled={disableControls}
+                    >
+                      <span className={styles.modelsActionIconWrap}>
+                        <IconModelCluster className={styles.actionIcon} size={16} />
+                      </span>
+                    </Button>
+                  )}
+                  {!isRuntimeOnly && (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => onDownload(file.name)}
+                        className={styles.iconButton}
+                        title={t('auth_files.download_button')}
+                        disabled={disableControls}
+                      >
+                        <IconDownload className={styles.actionIcon} size={16} />
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => onOpenPrefixProxyEditor(file)}
+                        className={styles.iconButton}
+                        title={t('auth_files.prefix_proxy_button')}
+                        disabled={disableControls}
+                      >
+                        <IconSettings className={styles.actionIcon} size={16} />
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => onDelete(file.name)}
+                        className={styles.iconButton}
+                        title={t('auth_files.delete_button')}
+                        disabled={disableControls || deleting === file.name}
+                      >
+                        {deleting === file.name ? (
+                          <LoadingSpinner size={14} />
+                        ) : (
+                          <IconTrash2 className={styles.actionIcon} size={16} />
+                        )}
+                      </Button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

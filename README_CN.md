@@ -11,15 +11,17 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 
 ## 面板预览
 
-![请求监控面板，展示筛选器、用量指标、账号汇总以及导入导出操作](img/screenshot-20260507-194947.png)
-![账号用量详情，展示 Codex 配额进度和模型级费用拆解](img/screenshot-20260507-195041.png)
-![实时监控表，展示请求状态、延迟、Token 用量和费用](img/screenshot-20260507-195154.png)
-![Codex 账号巡检进度，展示实时探测日志和清理建议](img/screenshot-20260507-194738.png)
+![请求监控面板，展示筛选器、用量指标、账号汇总以及导入导出操作](img/screenshot-20260509-105537.png)
+![账号用量汇总列表，展示调用次数、Token、费用和最近请求时间](img/screenshot-20260509-105706.png)
+![账号用量详情，展示 Codex 配额进度和模型级费用拆解](img/screenshot-20260509-110120.png)
+![实时监控表，展示请求状态、延迟、Token 用量和费用](img/screenshot-20260509-105807.png)
+![Codex 账号巡检进度，展示实时探测日志和清理建议](img/screenshot-20260509-113713.png)
 
 ## 提供什么
 
 - 面向 CPA Management API（`/v0/management`）的单文件 React 管理面板
 - Docker 化 Usage Service，用 SQLite 或 PostgreSQL 持久化请求统计
+- Windows/macOS/Linux 原生 `amd64` 和 `arm64` 运行包，内置管理面板
 - 两种部署模式：
   - **完整 Docker 方案**：访问 Usage Service 内置面板，登录时只填写 CPA 地址和 Management Key
   - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html`，然后在面板中配置单独部署的 Usage Service 地址
@@ -105,6 +107,47 @@ http://<host>:18317/management.html
 - Management Key
 
 发布镜像支持 `linux/amd64` 和 `linux/arm64`。如果你的镜像发布在其他 Docker Hub 命名空间，把 `seakee/cpa-manager:latest` 替换成实际镜像名。
+
+### 原生运行包
+
+GitHub Releases 同时提供内置面板的原生运行包：
+
+- `cpa-manager_<version>_linux_amd64.tar.gz`
+- `cpa-manager_<version>_linux_arm64.tar.gz`
+- `cpa-manager_<version>_darwin_amd64.tar.gz`
+- `cpa-manager_<version>_darwin_arm64.tar.gz`
+- `cpa-manager_<version>_windows_amd64.zip`
+- `cpa-manager_<version>_windows_arm64.zip`
+
+macOS/Linux：
+
+```bash
+tar -xzf cpa-manager_vX.Y.Z_linux_amd64.tar.gz
+cd cpa-manager_vX.Y.Z_linux_amd64
+./cpa-manager
+```
+
+tar 包已保留执行权限，正常解压后不需要额外 `chmod +x`。macOS 如果提示无法打开未签名程序，可在解压目录执行 `xattr -dr com.apple.quarantine .` 后再运行。
+
+Windows PowerShell：
+
+```powershell
+Expand-Archive .\cpa-manager_vX.Y.Z_windows_amd64.zip -DestinationPath .
+cd .\cpa-manager_vX.Y.Z_windows_amd64
+.\cpa-manager.exe
+```
+
+Windows 可直接双击 `cpa-manager.exe` 启动，但推荐用 PowerShell 运行，方便查看日志和错误信息。
+
+启动后打开：
+
+```text
+http://<host>:18317/management.html
+```
+
+原生包不包含 CPA 本体。请让 CPA 独立运行，并在登录页填写 CPA 地址和 Management Key。需要自定义数据位置时，可以设置 `USAGE_DATA_DIR` 或 `USAGE_DB_PATH` 覆盖默认值。
+
+原生包首次启动时，如果没有设置 `USAGE_DATA_DIR` 或 `USAGE_DB_PATH`，会在程序所在目录自动生成 `config.json`，并把 SQLite 数据写入同目录下的 `data/usage.sqlite`。这样解压后的目录就是完整的程序和用户数据目录。
 
 ### Docker Compose
 
@@ -193,10 +236,11 @@ docker compose -f docker-compose.usage.yml up --build
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
+| `CPA_MANAGER_CONFIG` | 空 | 可选配置文件路径；为空时原生包默认使用程序同目录的 `config.json` |
 | `HTTP_ADDR` | `0.0.0.0:18317` | Usage Service HTTP 监听地址 |
 | `USAGE_DB_DRIVER` | `sqlite` | 存储驱动：`sqlite` 或 `postgres` |
-| `USAGE_DB_PATH` | `/data/usage.sqlite` | SQLite 数据库路径 |
-| `USAGE_DATA_DIR` | `/data` | 未覆盖 `USAGE_DB_PATH` 时的数据目录 |
+| `USAGE_DB_PATH` | Docker：`/data/usage.sqlite`；原生包：`./data/usage.sqlite` | SQLite 数据库路径 |
+| `USAGE_DATA_DIR` | Docker：`/data`；原生包：`./data` | 未覆盖 `USAGE_DB_PATH` 时的数据目录 |
 | `USAGE_DATABASE_URL` | 空 | `USAGE_DB_DRIVER=postgres` 时使用的 PostgreSQL DSN；Aiven URL 通常包含 `sslmode=require` |
 | `USAGE_DB_MAX_OPEN_CONNS` | `10` | PostgreSQL 最大打开连接数 |
 | `USAGE_DB_MAX_IDLE_CONNS` | `5` | PostgreSQL 最大空闲连接数 |
@@ -213,6 +257,15 @@ docker compose -f docker-compose.usage.yml up --build
 | `USAGE_CORS_ORIGINS` | `*` | CPA 控制面板方案下允许的浏览器来源 |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | RESP TLS 连接是否跳过证书校验 |
 | `PANEL_PATH` | 空 | 使用自定义 `management.html` 替代内置面板 |
+
+配置优先级为：环境变量 > `config.json` > 程序默认值。配置文件中的相对路径按配置文件所在目录解析。默认生成的配置文件内容如下：
+
+```json
+{
+  "httpAddr": "0.0.0.0:18317",
+  "dataDir": "./data"
+}
+```
 
 如果设置了 `CPA_UPSTREAM_URL` 和 `CPA_MANAGEMENT_KEY`，服务启动后会自动开始采集。否则通过面板 setup 流程配置。
 
@@ -284,7 +337,8 @@ go run ./cmd/cpa-manager
 
 - Vite 输出单文件 `dist/index.html`
 - 打 `vX.Y.Z` 标签会触发 `.github/workflows/release.yml`
-- 发布流程会上传 `dist/management.html` 到 GitHub Releases
+- 发布流程会上传 `dist/management.html`、原生运行包和 `checksums.txt` 到 GitHub Releases
+- 原生运行包会发布 `linux`、`darwin`、`windows` 的 `amd64` 和 `arm64` 版本，包内已内置管理面板
 - 同一个 workflow 会构建 `Dockerfile.usage-service` 并推送 `seakee/cpa-manager`
 - Docker 镜像会发布 `linux/amd64` 和 `linux/arm64`
 - workflow 会把 `README.md` 同步到 Docker Hub overview

@@ -82,6 +82,7 @@ import styles from '@/pages/QuotaPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
 type QuotaType = 'antigravity' | 'claude' | 'codex' | 'gemini-cli' | 'kimi';
+export type QuotaSortMode = 'default' | 'name-asc' | 'plan-desc' | 'plan-asc';
 
 const DEFAULT_ANTIGRAVITY_PROJECT_ID = 'bamboo-precept-lgxtn';
 const QUOTA_PROGRESS_HIGH_THRESHOLD = 70;
@@ -121,6 +122,8 @@ export interface QuotaConfig<TState, TData> {
   controlsClassName: string;
   controlClassName: string;
   gridClassName: string;
+  getSearchText?: (file: AuthFileItem, quota: TState | undefined, t: TFunction) => unknown[];
+  getPlanSortRank?: (file: AuthFileItem, quota: TState | undefined) => number | null;
   renderQuotaItems: (quota: TState, t: TFunction, helpers: QuotaRenderHelpers) => ReactNode;
 }
 
@@ -735,6 +738,46 @@ const renderAntigravityItems = (
 const PREMIUM_GEMINI_CLI_TIER_IDS = new Set(['g1-ultra-tier']);
 const PREMIUM_CODEX_PLAN_TYPES = new Set(['pro', 'prolite', 'pro-lite', 'pro_lite']);
 
+const getCodexPlanLabel = (planType: string | null | undefined, t: TFunction): string | null => {
+  const normalized = normalizePlanType(planType);
+  if (!normalized) return null;
+  if (normalized === 'pro') return t('codex_quota.plan_pro');
+  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') {
+    return t('codex_quota.plan_prolite');
+  }
+  if (normalized === 'plus') return t('codex_quota.plan_plus');
+  if (normalized === 'team') return t('codex_quota.plan_team');
+  if (normalized === 'free') return t('codex_quota.plan_free');
+  return planType || normalized;
+};
+
+const getCodexEffectivePlanType = (
+  file: AuthFileItem,
+  quota?: CodexQuotaState
+): string | null => resolveCodexPlanType(file) ?? quota?.planType ?? null;
+
+const getCodexPlanSortRank = (file: AuthFileItem, quota?: CodexQuotaState): number | null => {
+  const normalized = normalizePlanType(getCodexEffectivePlanType(file, quota));
+  if (!normalized) return null;
+  if (normalized === 'pro') return 50;
+  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') return 40;
+  if (normalized === 'team') return 30;
+  if (normalized === 'plus') return 20;
+  if (normalized === 'free') return 10;
+  return 0;
+};
+
+const getCodexSearchText = (
+  file: AuthFileItem,
+  quota: CodexQuotaState | undefined,
+  t: TFunction
+): unknown[] => {
+  const planType = getCodexEffectivePlanType(file, quota);
+  const planLabel = getCodexPlanLabel(planType, t);
+  const accountId = resolveCodexChatgptAccountId(file);
+  return [planType, planLabel, accountId];
+};
+
 const renderCodexItems = (
   quota: CodexQuotaState,
   t: TFunction,
@@ -744,21 +787,7 @@ const renderCodexItems = (
   const { createElement: h, Fragment } = React;
   const windows = quota.windows ?? [];
   const planType = quota.planType ?? null;
-
-  const getPlanLabel = (pt?: string | null): string | null => {
-    const normalized = normalizePlanType(pt);
-    if (!normalized) return null;
-    if (normalized === 'pro') return t('codex_quota.plan_pro');
-    if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') {
-      return t('codex_quota.plan_prolite');
-    }
-    if (normalized === 'plus') return t('codex_quota.plan_plus');
-    if (normalized === 'team') return t('codex_quota.plan_team');
-    if (normalized === 'free') return t('codex_quota.plan_free');
-    return pt || normalized;
-  };
-
-  const planLabel = getPlanLabel(planType);
+  const planLabel = getCodexPlanLabel(planType, t);
   const isPremiumPlan = PREMIUM_CODEX_PLAN_TYPES.has(normalizePlanType(planType) ?? '');
   const nodes: ReactNode[] = [];
 
@@ -1196,6 +1225,8 @@ export const CODEX_CONFIG: QuotaConfig<
   controlsClassName: styles.codexControls,
   controlClassName: styles.codexControl,
   gridClassName: styles.codexGrid,
+  getSearchText: getCodexSearchText,
+  getPlanSortRank: getCodexPlanSortRank,
   renderQuotaItems: renderCodexItems,
 };
 

@@ -127,6 +127,7 @@ export interface CodexInspectionExecutionResult {
 
 type LogHandler = (level: CodexInspectionLogLevel, message: string) => void;
 type ProgressHandler = (progress: CodexInspectionProgressSnapshot) => void;
+type ResultsChangeHandler = (result: CodexInspectionRunResult) => void;
 
 type InspectCodexAccountsOptions = {
   config: Config | null;
@@ -135,6 +136,7 @@ type InspectCodexAccountsOptions = {
   settings?: Partial<CodexInspectionConfigurableSettings> | null;
   onLog?: LogHandler;
   onProgress?: ProgressHandler;
+  onResultsChange?: ResultsChangeHandler;
 };
 
 type ExecuteCodexInspectionActionsOptions = {
@@ -850,6 +852,7 @@ export const createCodexInspectionSession = ({
   settings,
   onLog,
   onProgress,
+  onResultsChange,
 }: CreateCodexInspectionSessionOptions): CodexInspectionSession => {
   const resolvedSettings = resolveCodexInspectionSettings(config, apiBase, managementKey, settings);
   const sessionId = `codex-inspection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -872,7 +875,7 @@ export const createCodexInspectionSession = ({
     onProgress?.(createProgressSnapshot(sampledAccounts.length, resultMap.size, inFlight, status, baseTime, Date.now(), summary));
   };
 
-  const buildFinalResult = (finishedTime: number): CodexInspectionRunResult => {
+  const buildRunResult = (finishedTime: number): CodexInspectionRunResult => {
     const results = sortResults(Array.from(resultMap.values()));
     const summary = buildSummary(files, probeSet, results, resolvedSettings);
     return {
@@ -883,6 +886,11 @@ export const createCodexInspectionSession = ({
       startedAt,
       finishedAt: finishedTime,
     };
+  };
+
+  const emitResultsChange = (latestResult: CodexInspectionResultItem) => {
+    if (latestResult.action === 'keep') return;
+    onResultsChange?.(buildRunResult(0));
   };
 
   const settleStopped = () => {
@@ -897,7 +905,7 @@ export const createCodexInspectionSession = ({
     const currentDeferred = deferred;
     deferred = null;
     finishedAt = Date.now();
-    finalResult = buildFinalResult(finishedAt);
+    finalResult = buildRunResult(finishedAt);
     status = 'completed';
     emitProgress();
     onLog?.(
@@ -935,9 +943,10 @@ export const createCodexInspectionSession = ({
       void inspectSingleAccount(account, resolvedSettings, onLog)
         .then((inspectionResult) => {
           resultMap.set(inspectionResult.key, inspectionResult);
+          emitResultsChange(inspectionResult);
         })
         .catch((error) => {
-          resultMap.set(account.key, {
+          const fallbackResult: CodexInspectionResultItem = {
             ...account,
             action: 'keep',
             actionReason: '探测异常，保留账号',
@@ -945,7 +954,9 @@ export const createCodexInspectionSession = ({
             usedPercent: null,
             isQuota: false,
             error: error instanceof Error ? error.message : String(error || '探测失败'),
-          });
+          };
+          resultMap.set(account.key, fallbackResult);
+          emitResultsChange(fallbackResult);
         })
         .finally(() => {
           inFlight = Math.max(0, inFlight - 1);
@@ -1086,6 +1097,7 @@ export const inspectCodexAccounts = async ({
   settings,
   onLog,
   onProgress,
+  onResultsChange,
 }: InspectCodexAccountsOptions): Promise<CodexInspectionRunResult> => {
   const session = createCodexInspectionSession({
     config,
@@ -1094,6 +1106,7 @@ export const inspectCodexAccounts = async ({
     settings,
     onLog,
     onProgress,
+    onResultsChange,
   });
 
   return session.start();

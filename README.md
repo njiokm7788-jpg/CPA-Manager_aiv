@@ -11,15 +11,17 @@ Since v6.10.0, CPA no longer includes built-in usage statistics. This project no
 
 ## Panel Preview
 
-![Request monitoring dashboard showing filters, usage KPIs, account summaries, and export/import actions](img/screenshot-20260507-194947.png)
-![Account usage detail with Codex quota bars and model-level cost breakdown](img/screenshot-20260507-195041.png)
-![Realtime monitoring table showing request status, latency, token usage, and cost](img/screenshot-20260507-195154.png)
-![Codex account inspection progress with live probe logs and cleanup recommendations](img/screenshot-20260507-194738.png)
+![Request monitoring dashboard showing filters, usage KPIs, account summaries, and export/import actions](img/screenshot-20260509-105537.png)
+![Account usage summary list showing calls, tokens, costs, and recent request times](img/screenshot-20260509-105706.png)
+![Account usage detail with Codex quota bars and model-level cost breakdown](img/screenshot-20260509-110120.png)
+![Realtime monitoring table showing request status, latency, token usage, and cost](img/screenshot-20260509-105807.png)
+![Codex account inspection progress with live probe logs and cleanup recommendations](img/screenshot-20260509-113713.png)
 
 ## What This Provides
 
 - A single-file React management panel for CPA Management API (`/v0/management`)
 - A Dockerized Usage Service for SQLite-backed or PostgreSQL-backed usage persistence
+- Native `amd64` and `arm64` packages for Windows, macOS, and Linux with the panel embedded
 - Two deployment modes:
   - **Full Docker mode**: open the built-in panel from Usage Service and only enter the CPA URL + Management Key
   - **CPA panel mode**: keep using CPA's `/management.html`, then configure a separately deployed Usage Service inside the panel
@@ -105,6 +107,47 @@ Enter:
 - Management Key
 
 The published image supports `linux/amd64` and `linux/arm64`. If your image is published under another Docker Hub namespace, replace `seakee/cpa-manager:latest`.
+
+### Native Packages
+
+GitHub Releases also provide native packages with the panel embedded:
+
+- `cpa-manager_<version>_linux_amd64.tar.gz`
+- `cpa-manager_<version>_linux_arm64.tar.gz`
+- `cpa-manager_<version>_darwin_amd64.tar.gz`
+- `cpa-manager_<version>_darwin_arm64.tar.gz`
+- `cpa-manager_<version>_windows_amd64.zip`
+- `cpa-manager_<version>_windows_arm64.zip`
+
+macOS/Linux:
+
+```bash
+tar -xzf cpa-manager_vX.Y.Z_linux_amd64.tar.gz
+cd cpa-manager_vX.Y.Z_linux_amd64
+./cpa-manager
+```
+
+The tar archives preserve execute permissions, so no extra `chmod +x` is normally required after extraction. If macOS blocks the unsigned binary, run `xattr -dr com.apple.quarantine .` in the extracted directory and start it again.
+
+Windows PowerShell:
+
+```powershell
+Expand-Archive .\cpa-manager_vX.Y.Z_windows_amd64.zip -DestinationPath .
+cd .\cpa-manager_vX.Y.Z_windows_amd64
+.\cpa-manager.exe
+```
+
+You can double-click `cpa-manager.exe` on Windows, but PowerShell is recommended because it keeps logs and startup errors visible.
+
+Then open:
+
+```text
+http://<host>:18317/management.html
+```
+
+Native packages do not include CPA itself. Run CPA separately, then enter the CPA URL and Management Key on the login page. Set `USAGE_DATA_DIR` or `USAGE_DB_PATH` only when you want to override the default data location.
+
+On first start, if `USAGE_DATA_DIR` and `USAGE_DB_PATH` are not set, the native package creates `config.json` next to the binary and writes SQLite data to `data/usage.sqlite` in the same directory. The extracted package directory therefore contains both the program and its user data.
 
 ### Docker Compose
 
@@ -193,10 +236,11 @@ Most users can configure CPA URL and Management Key from the panel. Environment 
 
 | Variable | Default | Description |
 |---|---:|---|
+| `CPA_MANAGER_CONFIG` | empty | Optional config file path. When empty, native packages use `config.json` next to the binary |
 | `HTTP_ADDR` | `0.0.0.0:18317` | Usage Service HTTP listen address |
 | `USAGE_DB_DRIVER` | `sqlite` | Storage driver: `sqlite` or `postgres` |
-| `USAGE_DB_PATH` | `/data/usage.sqlite` | SQLite database path |
-| `USAGE_DATA_DIR` | `/data` | Base data directory when `USAGE_DB_PATH` is not overridden |
+| `USAGE_DB_PATH` | Docker: `/data/usage.sqlite`; native: `./data/usage.sqlite` | SQLite database path |
+| `USAGE_DATA_DIR` | Docker: `/data`; native: `./data` | Base data directory when `USAGE_DB_PATH` is not overridden |
 | `USAGE_DATABASE_URL` | empty | PostgreSQL DSN when `USAGE_DB_DRIVER=postgres`; Aiven URLs usually include `sslmode=require` |
 | `USAGE_DB_MAX_OPEN_CONNS` | `10` | Maximum open PostgreSQL connections |
 | `USAGE_DB_MAX_IDLE_CONNS` | `5` | Maximum idle PostgreSQL connections |
@@ -213,6 +257,15 @@ Most users can configure CPA URL and Management Key from the panel. Environment 
 | `USAGE_CORS_ORIGINS` | `*` | Allowed browser origins for CPA panel mode |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | Skip TLS verification for RESP connection |
 | `PANEL_PATH` | empty | Serve a custom `management.html` instead of the embedded one |
+
+Configuration precedence is: environment variables > `config.json` > program defaults. Relative paths in the config file are resolved from the config file directory. The generated default config is:
+
+```json
+{
+  "httpAddr": "0.0.0.0:18317",
+  "dataDir": "./data"
+}
+```
 
 If `CPA_UPSTREAM_URL` and `CPA_MANAGEMENT_KEY` are set, collection starts automatically on boot. Otherwise, use the web panel setup flow.
 
@@ -284,7 +337,8 @@ go run ./cmd/cpa-manager
 
 - Vite builds a single-file `dist/index.html`.
 - Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`.
-- The release workflow uploads `dist/management.html` to GitHub Releases.
+- The release workflow uploads `dist/management.html`, native packages, and `checksums.txt` to GitHub Releases.
+- Native packages are published for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`, with the management panel embedded.
 - The same workflow builds `Dockerfile.usage-service` and pushes `seakee/cpa-manager`.
 - The Docker image is published for `linux/amd64` and `linux/arm64`.
 - The workflow syncs `README.md` to the Docker Hub overview.

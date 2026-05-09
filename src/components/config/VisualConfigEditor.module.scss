@@ -5,10 +5,15 @@
   display: flex;
   flex-direction: column;
   gap: $spacing-xl;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 
   :global(.form-group) {
     gap: 8px;
     margin-bottom: 0;
+    min-width: 0;
+    max-width: 100%;
   }
 
   :global(.form-group > label) {
@@ -19,6 +24,9 @@
   }
 
   :global(.input) {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     min-height: 48px;
     border-radius: 16px;
     background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
@@ -127,161 +135,17 @@
   right: 14px;
 }
 
-.overview {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  border-radius: 30px;
-  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
-  background:
-    radial-gradient(
-      circle at top right,
-      color-mix(in srgb, var(--primary-color) 12%, transparent),
-      transparent 36%
-    ),
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--bg-primary) 94%, transparent),
-      color-mix(in srgb, var(--bg-secondary) 96%, transparent)
-    );
-  padding: clamp(22px, 3vw, 30px);
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0 auto auto 0;
-    width: min(220px, 44vw);
-    height: min(220px, 44vw);
-    background: radial-gradient(
-      circle,
-      color-mix(in srgb, var(--primary-color) 16%, transparent),
-      transparent 72%
-    );
-    opacity: 0.6;
-    pointer-events: none;
-  }
-}
-
-.overviewHeader {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.overviewMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.overviewPill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
-  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.overviewPillWarning {
-  color: var(--warning-text);
-  border-color: var(--warning-border);
-  background: var(--warning-bg);
-}
-
-.overviewFocusList {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-
-  @media (max-width: 1200px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  @include mobile {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.overviewFocusLink {
-  @include button-reset;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
-  background: color-mix(in srgb, var(--bg-primary) 74%, transparent);
-  text-align: left;
-  transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    background-color 0.18s ease;
-
-  &:hover {
-    transform: translateY(-1px);
-    border-color: color-mix(in srgb, var(--primary-color) 26%, var(--border-color));
-    background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
-  }
-}
-
-.overviewFocusLinkActive {
-  border-color: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
-}
-
-.focusIcon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-secondary));
-  color: var(--primary-hover);
-  flex: 0 0 auto;
-}
-
-.focusCopy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.focusTitle {
-  color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.focusDescription {
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 232px) minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 
-  @media (max-width: 1024px) {
+  @media (max-width: 1280px) {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -292,6 +156,16 @@
 
 .mobileSectionNav {
   display: none;
+
+  @media (max-width: 1280px) {
+    position: sticky;
+    top: calc(var(--header-height, 64px) + 12px);
+    z-index: 4;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    margin-bottom: 4px;
+  }
 
   @include mobile {
     position: sticky;
@@ -318,10 +192,10 @@
   @include button-reset;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: max-content;
   flex: 0 0 auto;
-  padding: 10px 14px;
+  padding: 9px 13px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
   background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
@@ -334,24 +208,21 @@
   background: color-mix(in srgb, var(--bg-primary) 96%, transparent);
 }
 
-.mobileSectionNavIndex {
+.mobileSectionNavIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
+  width: 27px;
+  height: 27px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
   color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  flex: 0 0 auto;
 }
 
 .mobileSectionNavLabel {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 700;
 }
 
@@ -374,11 +245,7 @@
   position: relative;
   align-self: start;
 
-  @media (max-width: 1024px) {
-    position: static;
-  }
-
-  @include mobile {
+  @media (max-width: 1280px) {
     display: none;
   }
 }
@@ -460,10 +327,10 @@
   @include button-reset;
   display: flex;
   align-items: flex-start;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
-  padding: 14px;
-  border-radius: 20px;
+  padding: 13px;
+  border-radius: 18px;
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
@@ -495,26 +362,23 @@
   box-shadow: 0 18px 36px -30px rgba(0, 0, 0, 0.32);
 }
 
-.navIndex {
+.navIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
-  height: 34px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 11px;
   background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: var(--primary-hover);
   flex: 0 0 auto;
 }
 
 .navMain {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   flex: 1;
 }
@@ -533,25 +397,17 @@
   min-width: 0;
 }
 
-.navIcon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--primary-hover);
-  flex: 0 0 auto;
-}
-
 .navLabel {
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.2;
 }
 
 .navDescription {
   color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .navBadge {
@@ -573,7 +429,10 @@
 .sections {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   padding: clamp(20px, 3vw, 30px);
   border-radius: 32px;
   border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
@@ -584,6 +443,12 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+
+  > * {
+    min-width: 0;
+  }
 
   @include mobile {
     grid-template-columns: minmax(0, 1fr);
@@ -606,6 +471,9 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 16px 18px;
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
@@ -870,16 +738,6 @@
 }
 
 @include mobile {
-  .overview {
-    gap: 14px;
-    padding: 18px;
-    border-radius: 24px;
-  }
-
-  .overviewFocusLink {
-    padding: 12px 14px;
-  }
-
   .sections {
     border-radius: 26px;
     padding: 16px;
@@ -917,7 +775,6 @@
 }
 
 @media (max-width: 380px) {
-  .overview,
   .sections {
     padding: 14px;
   }

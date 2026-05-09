@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
@@ -10,7 +11,9 @@ import {
   IconChevronDown,
   IconChevronUp,
   IconExternalLink,
-  IconShield,
+  IconRefreshCw,
+  IconSettings,
+  IconTrash2,
 } from '@/components/ui/icons';
 import {
   applyCodexInspectionExecutionResult,
@@ -37,6 +40,10 @@ import styles from './CodexInspectionPage.module.scss';
 
 type RunStatus = 'idle' | 'running' | 'paused' | 'success' | 'error';
 
+type ActionFilter = 'all' | 'delete' | 'disable' | 'enable';
+
+type StatusTone = 'idle' | 'info' | 'good' | 'warn' | 'bad';
+
 type InspectionLogEntry = {
   id: string;
   level: CodexInspectionLogLevel;
@@ -50,7 +57,8 @@ type SummaryCard = {
   key: string;
   label: string;
   value: string;
-  tone?: 'neutral' | 'good' | 'warn' | 'bad';
+  meta: string;
+  tone?: StatusTone;
 };
 
 type InspectionSettingsDraft = {
@@ -67,6 +75,16 @@ type InspectionSettingsDraft = {
 
 type InspectionSettingsDraftField = Exclude<keyof InspectionSettingsDraft, 'autoExecuteActions'>;
 
+type PanelProps = {
+  title: string;
+  subtitle?: string;
+  extra?: ReactNode;
+  children: ReactNode;
+  className?: string;
+};
+
+const ACTION_FILTERS: ActionFilter[] = ['all', 'delete', 'disable', 'enable'];
+
 const actionToneClass: Record<CodexInspectionAction, string> = {
   keep: styles.actionKeep,
   delete: styles.actionDelete,
@@ -82,6 +100,7 @@ const levelClassMap: Record<CodexInspectionLogLevel, string> = {
 };
 
 const formatTimestamp = (value: number, locale: string) => new Date(value).toLocaleString(locale);
+const formatTime = (value: number, locale: string) => new Date(value).toLocaleTimeString(locale);
 
 const formatPercent = (value: number | null) => (value === null ? '--' : `${value.toFixed(1)}%`);
 
@@ -97,7 +116,7 @@ const toSettingsDraft = (settings: CodexInspectionConfigurableSettings): Inspect
   autoExecuteActions: settings.autoExecuteActions,
 });
 
-const formatActionLabel = (action: CodexInspectionAction, t: ReturnType<typeof useTranslation>['t']) => {
+const formatActionLabel = (action: CodexInspectionAction, t: TFunction) => {
   switch (action) {
     case 'delete':
       return t('monitoring.codex_inspection_action_delete');
@@ -111,7 +130,7 @@ const formatActionLabel = (action: CodexInspectionAction, t: ReturnType<typeof u
   }
 };
 
-const formatCurrentStateLabel = (item: CodexInspectionResultItem, t: ReturnType<typeof useTranslation>['t']) => {
+const formatCurrentStateLabel = (item: CodexInspectionResultItem, t: TFunction) => {
   if (item.disabled) return t('monitoring.codex_inspection_state_disabled');
   return t('monitoring.codex_inspection_state_enabled');
 };
@@ -152,6 +171,26 @@ const createIdleProgressSnapshot = (): CodexInspectionProgressSnapshot => ({
   updatedAt: Date.now(),
 });
 
+const filterByAction = (items: CodexInspectionResultItem[], filter: ActionFilter) => {
+  if (filter === 'all') return items;
+  return items.filter((item) => item.action === filter);
+};
+
+function Panel({ title, subtitle, extra, children, className }: PanelProps) {
+  return (
+    <Card className={[styles.panel, className].filter(Boolean).join(' ')}>
+      <div className={styles.panelHeader}>
+        <div className={styles.panelHeading}>
+          <h2 className={styles.panelTitle}>{title}</h2>
+          {subtitle ? <p className={styles.panelSubtitle}>{subtitle}</p> : null}
+        </div>
+        {extra ? <div className={styles.panelExtra}>{extra}</div> : null}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
 export function CodexInspectionPage() {
   const { t, i18n } = useTranslation();
   const config = useConfigStore((state) => state.config);
@@ -169,11 +208,12 @@ export function CodexInspectionPage() {
   );
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [logs, setLogs] = useState<InspectionLogEntry[]>([]);
-  const [logsCollapsed, setLogsCollapsed] = useState(false);
+  const [logsCollapsed, setLogsCollapsed] = useState(true);
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [progress, setProgress] = useState<CodexInspectionProgressSnapshot>(createIdleProgressSnapshot);
   const [result, setResult] = useState<CodexInspectionRunResult | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
   const logCounterRef = useRef(0);
   const sessionRef = useRef<CodexInspectionSession | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -206,12 +246,16 @@ export function CodexInspectionPage() {
     ]);
   }, []);
 
-  useEffect(() => {
-    if (logsCollapsed) return;
+  const scrollLogsToBottom = useCallback(() => {
     const element = logListRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [logs, logsCollapsed]);
+  }, []);
+
+  useEffect(() => {
+    if (logsCollapsed) return;
+    scrollLogsToBottom();
+  }, [logs, logsCollapsed, scrollLogsToBottom]);
 
   useEffect(() => {
     return () => {
@@ -301,6 +345,7 @@ export function CodexInspectionPage() {
       setResult(null);
       setRunStatus('running');
       setLogsCollapsed(false);
+      setActionFilter('all');
 
       const session = createCodexInspectionSession({
         config,
@@ -321,6 +366,10 @@ export function CodexInspectionPage() {
           if (snapshot.status === 'paused') {
             setRunStatus('paused');
           }
+        },
+        onResultsChange: (nextResult) => {
+          if (activeSessionIdRef.current !== session.id) return;
+          setResult(nextResult);
         },
       });
 
@@ -450,6 +499,11 @@ export function CodexInspectionPage() {
     [result]
   );
 
+  const filteredResults = useMemo(
+    () => filterByAction(actionableResults, actionFilter),
+    [actionableResults, actionFilter]
+  );
+
   const handleExecutePlanned = useCallback(() => {
     if (!result) return;
 
@@ -490,49 +544,105 @@ export function CodexInspectionPage() {
 
   const summaryCards = useMemo<SummaryCard[]>(() => {
     const summarySource =
-      result?.summary ?? (runStatus === 'running' || runStatus === 'paused' ? progress.summary : null);
+      runStatus === 'running' || runStatus === 'paused' ? progress.summary : result?.summary ?? null;
+    const blank = '--';
+    const dash = '—';
+    const probeSetCount = summarySource ? summarySource.probeSetCount : null;
+    const sampledTotal = summarySource ? summarySource.sampledCount : null;
+    const sampledCompleted =
+      summarySource === null
+        ? null
+        : runStatus === 'running' || runStatus === 'paused'
+          ? progress.completed
+          : summarySource.sampledCount;
+    const deleteCount = summarySource ? summarySource.deleteCount : null;
+    const disableCount = summarySource ? summarySource.disableCount : null;
+    const enableCount = summarySource ? summarySource.enableCount : null;
+    const totalActions =
+      summarySource !== null
+        ? summarySource.deleteCount + summarySource.disableCount + summarySource.enableCount
+        : null;
 
-    if (!summarySource) {
-      return [
-        { key: 'total', label: t('monitoring.codex_inspection_total_accounts'), value: '--' },
-        { key: 'sampled', label: t('monitoring.codex_inspection_sampled_accounts'), value: '--' },
-        { key: 'delete', label: t('monitoring.codex_inspection_delete_count'), value: '--' },
-        { key: 'disable', label: t('monitoring.codex_inspection_disable_count'), value: '--' },
-        { key: 'enable', label: t('monitoring.codex_inspection_enable_count'), value: '--' },
-      ];
-    }
+    const probeMeta = summarySource
+      ? `${t('monitoring.codex_inspection_target_type')} ${inspectionSettings.targetType}`
+      : t('monitoring.codex_inspection_progress_idle');
+
+    const sampledMeta = (() => {
+      if (sampledTotal === null) {
+        return t('monitoring.codex_inspection_sampled_meta_idle');
+      }
+      if (runStatus === 'running' || runStatus === 'paused') {
+        return t('monitoring.codex_inspection_sampled_meta_running', {
+          total: sampledTotal,
+          percent: progress.percent,
+        });
+      }
+      return t('monitoring.codex_inspection_sampled_meta_done', { total: sampledTotal });
+    })();
 
     return [
       {
-        key: 'total',
+        key: 'total-actions',
+        label: t('monitoring.codex_inspection_action_total'),
+        value: totalActions === null ? blank : String(totalActions),
+        meta:
+          totalActions !== null && totalActions > 0
+            ? t('monitoring.codex_inspection_pending_actions') + ` ${totalActions}`
+            : t('monitoring.codex_inspection_no_pending_actions'),
+        tone: totalActions && totalActions > 0 ? 'warn' : 'good',
+      },
+      {
+        key: 'probe-total',
         label: t('monitoring.codex_inspection_total_accounts'),
-        value: String(summarySource.probeSetCount),
+        value: probeSetCount === null ? blank : String(probeSetCount),
+        meta: probeMeta,
       },
       {
         key: 'sampled',
         label: t('monitoring.codex_inspection_sampled_accounts'),
-        value: String(summarySource.sampledCount),
+        value: sampledCompleted === null ? blank : String(sampledCompleted),
+        meta: sampledMeta,
       },
       {
         key: 'delete',
         label: t('monitoring.codex_inspection_delete_count'),
-        value: String(summarySource.deleteCount),
-        tone: summarySource.deleteCount > 0 ? 'bad' : 'neutral',
+        value: deleteCount === null ? blank : String(deleteCount),
+        meta:
+          deleteCount && deleteCount > 0
+            ? t('monitoring.codex_inspection_action_delete')
+            : dash,
+        tone: deleteCount && deleteCount > 0 ? 'bad' : undefined,
       },
       {
         key: 'disable',
         label: t('monitoring.codex_inspection_disable_count'),
-        value: String(summarySource.disableCount),
-        tone: summarySource.disableCount > 0 ? 'warn' : 'neutral',
+        value: disableCount === null ? blank : String(disableCount),
+        meta:
+          disableCount && disableCount > 0
+            ? t('monitoring.codex_inspection_action_disable')
+            : dash,
+        tone: disableCount && disableCount > 0 ? 'warn' : undefined,
       },
       {
         key: 'enable',
         label: t('monitoring.codex_inspection_enable_count'),
-        value: String(summarySource.enableCount),
-        tone: summarySource.enableCount > 0 ? 'good' : 'neutral',
+        value: enableCount === null ? blank : String(enableCount),
+        meta:
+          enableCount && enableCount > 0
+            ? t('monitoring.codex_inspection_action_enable')
+            : dash,
+        tone: enableCount && enableCount > 0 ? 'good' : undefined,
       },
     ];
-  }, [progress.summary, result, runStatus, t]);
+  }, [
+    inspectionSettings.targetType,
+    progress.completed,
+    progress.percent,
+    progress.summary,
+    result,
+    runStatus,
+    t,
+  ]);
 
   const pendingActionCount = actionableResults.length;
   const progressLabel =
@@ -545,6 +655,31 @@ export function CodexInspectionPage() {
           percent: progress.percent,
         })
       : t('monitoring.codex_inspection_progress_idle');
+  const showProgressBar = runStatus === 'running' || runStatus === 'paused';
+
+  const statusToneMap: Record<RunStatus, StatusTone> = {
+    idle: 'idle',
+    running: 'info',
+    paused: 'warn',
+    success: 'good',
+    error: 'bad',
+  };
+
+  const statusLabelMap: Record<RunStatus, string> = {
+    idle: t('monitoring.codex_inspection_status_idle'),
+    running: t('monitoring.codex_inspection_status_running'),
+    paused: t('monitoring.codex_inspection_status_paused'),
+    success: t('monitoring.codex_inspection_status_success'),
+    error: t('monitoring.codex_inspection_status_error'),
+  };
+
+  const statusTone = statusToneMap[runStatus];
+  const statusLabel = statusLabelMap[runStatus];
+
+  const lastFinishedLabel = result && result.finishedAt > 0
+    ? `${t('monitoring.codex_inspection_last_finished_at')} · ${formatTime(result.finishedAt, i18n.language)}`
+    : null;
+
   const openSettingsModal = useCallback(() => {
     setSettingsDraft(toSettingsDraft(inspectionSettings));
     setIsSettingsModalOpen(true);
@@ -645,86 +780,142 @@ export function CodexInspectionPage() {
     showNotification(t('monitoring.codex_inspection_settings_reset'), 'success');
   }, [showNotification, t]);
 
+  const handleClearLogs = useCallback(() => {
+    setLogs([]);
+  }, []);
+
+  const handleJumpToLatest = useCallback(() => {
+    if (logsCollapsed) {
+      setLogsCollapsed(false);
+      requestAnimationFrame(scrollLogsToBottom);
+      return;
+    }
+    scrollLogsToBottom();
+  }, [logsCollapsed, scrollLogsToBottom]);
+
+  const filterCounts = useMemo(() => {
+    const counts = countActions(actionableResults);
+    return {
+      all: actionableResults.length,
+      delete: counts.delete,
+      disable: counts.disable,
+      enable: counts.enable,
+    };
+  }, [actionableResults]);
+
+  const filterLabel = (filter: ActionFilter) => {
+    switch (filter) {
+      case 'delete':
+        return t('monitoring.codex_inspection_filter_delete');
+      case 'disable':
+        return t('monitoring.codex_inspection_filter_disable');
+      case 'enable':
+        return t('monitoring.codex_inspection_filter_enable');
+      case 'all':
+      default:
+        return t('monitoring.codex_inspection_filter_all');
+    }
+  };
+
+  const isInspectionInFlight = runStatus === 'running' || runStatus === 'paused';
+  const runButtonLabel =
+    runStatus === 'paused'
+      ? t('monitoring.codex_inspection_resume')
+      : runStatus === 'running'
+        ? t('monitoring.codex_inspection_running')
+        : t('monitoring.codex_inspection_run');
+
   return (
     <div className={styles.page}>
-      <Card className={styles.heroCard}>
-        <div className={styles.heroHeader}>
-          <div className={styles.heroCopy}>
-            <div className={styles.heroEyebrow}>
-              <IconShield size={14} />
-              <span>{t('monitoring.codex_inspection_eyebrow')}</span>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>{t('monitoring.codex_inspection_title')}</h1>
+        <p className={styles.description}>{t('monitoring.codex_inspection_desc')}</p>
+      </div>
+
+      <Card className={`${styles.panel} ${styles.statusPanel}`}>
+        <div className={styles.statusBar}>
+          <div className={styles.statusInfo}>
+            <span className={`${styles.statusBadge} ${styles[`tone-${statusTone}`]}`}>
+              <span className={styles.statusDot} aria-hidden="true" />
+              {statusLabel}
+            </span>
+            <div className={styles.statusMeta}>
+              <span>{`${t('monitoring.codex_inspection_target_type')}: ${inspectionSettings.targetType}`}</span>
+              <span>{`${t('monitoring.codex_inspection_threshold')}: ${inspectionSettings.usedPercentThreshold}%`}</span>
+              <span>{`${t('monitoring.codex_inspection_workers')}: ${inspectionSettings.workers}`}</span>
+              <span>{`${t('monitoring.codex_inspection_sample_size')}: ${inspectionSettings.sampleSize || t('common.no')}`}</span>
+              {inspectionSettings.autoExecuteActions ? (
+                <span className={styles.statusMetaWarn}>
+                  {t('monitoring.codex_inspection_settings_auto_execute_actions_label')}
+                </span>
+              ) : null}
+              {lastFinishedLabel ? <span>{lastFinishedLabel}</span> : null}
+              {pendingActionCount > 0 ? (
+                <span
+                  className={styles.statusMetaWarn}
+                >{`${t('monitoring.codex_inspection_pending_total')} ${pendingActionCount}`}</span>
+              ) : null}
             </div>
-            <h1 className={styles.heroTitle}>{t('monitoring.codex_inspection_title')}</h1>
-            {/*<p className={styles.heroSubtitle}>{t('monitoring.codex_inspection_desc')}</p>*/}
           </div>
 
-          <div className={styles.heroActions}>
-            <Link to="/monitoring" className={styles.backLink}>
+          <div className={styles.statusActions}>
+            <Link to="/monitoring" className={styles.quickLink}>
               <IconExternalLink size={14} />
               <span>{t('monitoring.codex_inspection_back')}</span>
             </Link>
-            <Button
-              variant="secondary"
+            <button
+              type="button"
+              className={styles.iconButton}
               onClick={openSettingsModal}
-              disabled={(runStatus === 'running' || runStatus === 'paused') || executing}
+              disabled={isInspectionInFlight || executing}
+              aria-label={t('monitoring.codex_inspection_settings_button')}
+              title={t('monitoring.codex_inspection_settings_button')}
             >
-              {t('monitoring.codex_inspection_settings_button')}
-            </Button>
+              <IconSettings size={16} />
+            </button>
             <Button
-              variant="secondary"
+              variant="primary"
               onClick={handleRunInspection}
               loading={runStatus === 'running'}
               disabled={runStatus === 'running' || executing || connectionStatus !== 'connected'}
             >
-              {runStatus === 'paused'
-                ? t('monitoring.codex_inspection_resume')
-                : runStatus === 'running'
-                  ? t('monitoring.codex_inspection_running')
-                  : t('monitoring.codex_inspection_run')}
+              {runButtonLabel}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={handlePauseInspection}
-              disabled={runStatus !== 'running' || executing}
-            >
-              {t('monitoring.codex_inspection_pause')}
-            </Button>
-            <Button
-              variant="danger"
-              onClick={handleStopInspection}
-              disabled={(runStatus !== 'running' && runStatus !== 'paused') || executing}
-            >
-              {t('monitoring.codex_inspection_stop')}
-            </Button>
+            {isInspectionInFlight ? (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={handlePauseInspection}
+                  disabled={runStatus !== 'running' || executing}
+                >
+                  {t('monitoring.codex_inspection_pause')}
+                </Button>
+                <Button variant="danger" onClick={handleStopInspection} disabled={executing}>
+                  {t('monitoring.codex_inspection_stop')}
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
 
-        <div className={styles.metaRow}>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_target_type')}: ${inspectionSettings.targetType}`}</span>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_threshold')}: ${inspectionSettings.usedPercentThreshold}%`}</span>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_workers')}: ${inspectionSettings.workers}`}</span>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_delete_workers')}: ${inspectionSettings.deleteWorkers}`}</span>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_sample_size')}: ${inspectionSettings.sampleSize}`}</span>
-          <span className={styles.metaPill}>
-            {`${t('monitoring.codex_inspection_settings_auto_execute_actions_label')}: ${
-              inspectionSettings.autoExecuteActions ? t('common.yes') : t('common.no')
-            }`}
-          </span>
-          <span className={styles.metaPill}>{`${t('monitoring.codex_inspection_timeout')}: ${inspectionSettings.timeout}ms`}</span>
-        </div>
-        <div className={styles.progressSection}>
-          <div className={styles.progressHeader}>
-            <strong>{t('monitoring.codex_inspection_progress_title')}</strong>
-            <span>{`${progress.percent}%`}</span>
+        {showProgressBar ? (
+          <div className={styles.progressSection}>
+            <div className={styles.progressHeader}>
+              <strong>{t('monitoring.codex_inspection_progress_title')}</strong>
+              <span>{`${progress.percent}%`}</span>
+            </div>
+            <div className={styles.progressTrack}>
+              <span
+                className={styles.progressBar}
+                style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }}
+              />
+            </div>
+            <div className={styles.progressMeta}>
+              <span>{progressLabel}</span>
+              {runStatus === 'paused' ? <strong>{t('monitoring.codex_inspection_paused')}</strong> : null}
+            </div>
           </div>
-          <div className={styles.progressTrack}>
-            <span className={styles.progressBar} style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }} />
-          </div>
-          <div className={styles.progressMeta}>
-            <span>{progressLabel}</span>
-            {runStatus === 'paused' ? <strong>{t('monitoring.codex_inspection_paused')}</strong> : null}
-          </div>
-        </div>
+        ) : null}
       </Card>
 
       <section className={styles.summaryGrid}>
@@ -733,95 +924,59 @@ export function CodexInspectionPage() {
             key={card.key}
             className={[
               styles.summaryCard,
-              card.tone === 'good'
-                ? styles.summaryGood
-                : card.tone === 'warn'
-                  ? styles.summaryWarn
-                  : card.tone === 'bad'
-                    ? styles.summaryBad
-                    : '',
+              card.tone ? styles[`tone-${card.tone}`] : '',
             ]
               .filter(Boolean)
               .join(' ')}
           >
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
+            <span className={styles.summaryLabel}>{card.label}</span>
+            <strong className={styles.summaryValue}>{card.value}</strong>
+            <span className={styles.summaryMeta}>{card.meta}</span>
           </Card>
         ))}
       </section>
 
-      <Card className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <div>
-            <h2 className={styles.panelTitle}>{t('monitoring.codex_inspection_logs_title')}</h2>
-            <p className={styles.panelSubtitle}>{t('monitoring.codex_inspection_logs_desc')}</p>
-          </div>
-          <div className={styles.panelActions}>
-            <button
-              type="button"
-              className={styles.foldButton}
-              onClick={() => setLogsCollapsed((previous) => !previous)}
-              disabled={logs.length === 0}
-            >
-              {logsCollapsed ? <IconChevronDown size={16} /> : <IconChevronUp size={16} />}
-              <span>
-                {logsCollapsed
-                  ? t('monitoring.codex_inspection_expand_logs')
-                  : t('monitoring.codex_inspection_fold_logs')}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {!logsCollapsed ? (
-          <div ref={logListRef} className={styles.logList}>
-            {logs.length > 0 ? (
-              logs.map((entry) => (
-                <div key={entry.id} className={`${styles.logRow} ${levelClassMap[entry.level]}`}>
-                  <span className={styles.logTime}>{formatTimestamp(entry.timestamp, i18n.language)}</span>
-                  <span className={styles.logMessage}>{entry.message}</span>
-                </div>
-              ))
-            ) : (
-              <div className={styles.emptyBlock}>{t('monitoring.codex_inspection_logs_empty')}</div>
-            )}
-          </div>
-        ) : (
-          <div className={styles.logCollapsedBar}>
-            <span>{t('monitoring.codex_inspection_logs_collapsed', { count: logs.length })}</span>
-          </div>
-        )}
-      </Card>
-
-      <Card className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <div>
-            <h2 className={styles.panelTitle}>{t('monitoring.codex_inspection_results_title')}</h2>
-            <p className={styles.panelSubtitle}>{t('monitoring.codex_inspection_results_desc')}</p>
-          </div>
+      <Panel
+        title={t('monitoring.codex_inspection_results_title')}
+        subtitle={t('monitoring.codex_inspection_results_desc')}
+        extra={
           <div className={styles.resultsHeaderActions}>
-            {result ? (
-              <div className={styles.panelMeta}>
-                <span>{`${t('monitoring.last_sync')}: ${formatTimestamp(result.finishedAt, i18n.language)}`}</span>
-                <span>{`${t('monitoring.codex_inspection_pending_actions')}: ${pendingActionCount}`}</span>
-              </div>
-            ) : null}
             <Button
-              variant="primary"
+              variant={pendingActionCount > 0 ? 'danger' : 'primary'}
               size="sm"
               onClick={handleExecutePlanned}
               loading={executing}
-              disabled={!result || runStatus === 'running' || executing || pendingActionCount === 0}
+              disabled={!result || isInspectionInFlight || executing || pendingActionCount === 0}
             >
               {executing
                 ? t('monitoring.codex_inspection_executing')
                 : t('monitoring.codex_inspection_execute_now')}
             </Button>
           </div>
-        </div>
-
+        }
+      >
         {result ? (
           <>
+            <div className={styles.filterRow}>
+              <div className={styles.segmentedControl}>
+                {ACTION_FILTERS.map((filter) => {
+                  const count = filterCounts[filter];
+                  const isActive = actionFilter === filter;
+                  return (
+                    <button
+                      key={filter}
+                      type="button"
+                      className={`${styles.segmentButton} ${isActive ? styles.segmentButtonActive : ''}`}
+                      onClick={() => setActionFilter(filter)}
+                    >
+                      <span>{filterLabel(filter)}</span>
+                      <span className={styles.segmentCount}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <colgroup>
@@ -830,8 +985,6 @@ export function CodexInspectionPage() {
                   <col className={styles.httpColumn} />
                   <col className={styles.usageColumn} />
                   <col className={styles.actionColumn} />
-                  <col className={styles.reasonColumn} />
-                  <col className={styles.errorColumn} />
                   <col className={styles.operationColumn} />
                 </colgroup>
                 <thead>
@@ -841,47 +994,68 @@ export function CodexInspectionPage() {
                     <th>{t('monitoring.codex_inspection_http_status')}</th>
                     <th>{t('monitoring.codex_inspection_used_percent')}</th>
                     <th>{t('monitoring.codex_inspection_next_action')}</th>
-                    <th>{t('monitoring.codex_inspection_reason')}</th>
-                    <th>{t('monitoring.codex_inspection_error')}</th>
                     <th>{t('common.action')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {actionableResults.length > 0 ? (
-                    actionableResults.map((item) => (
-                    <tr key={item.key}>
-                      <td>
-                        <div className={styles.primaryCell}>
-                          <span>{item.displayAccount}</span>
-                          <small>{item.authIndex || '-'}</small>
-                        </div>
-                      </td>
-                      <td>{formatCurrentStateLabel(item, t)}</td>
-                      <td>{item.statusCode === null ? '--' : item.statusCode}</td>
-                      <td>{formatPercent(item.usedPercent)}</td>
-                      <td>
-                        <span className={`${styles.actionBadge} ${actionToneClass[item.action]}`}>
-                          {formatActionLabel(item.action, t)}
-                        </span>
-                      </td>
-                      <td>{item.actionReason}</td>
-                      <td className={item.error ? styles.errorText : styles.mutedText}>{item.error || '--'}</td>
-                      <td>
-                        <Button
-                          size="sm"
-                          variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                          onClick={() => handleExecuteSingle(item)}
-                          disabled={runStatus === 'running' || executing}
-                        >
-                          {formatActionLabel(item.action, t)}
-                        </Button>
-                      </td>
-                    </tr>
+                  {filteredResults.length > 0 ? (
+                    filteredResults.map((item) => (
+                      <tr key={item.key}>
+                        <td>
+                          <div className={styles.primaryCell}>
+                            <span className={styles.primaryAccount}>{item.displayAccount}</span>
+                            <small className={styles.primaryFile}>
+                              {item.fileName}
+                              {item.authIndex ? (
+                                <span className={styles.primaryIndex}>{` · #${item.authIndex}`}</span>
+                              ) : null}
+                            </small>
+                            {item.actionReason ? (
+                              <small className={styles.primaryReason}>{item.actionReason}</small>
+                            ) : null}
+                            {item.error ? (
+                              <small className={styles.primaryError}>{item.error}</small>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td>
+                          <span
+                            className={`${styles.stateChip} ${
+                              item.disabled ? styles.stateDisabled : styles.stateEnabled
+                            }`}
+                          >
+                            {formatCurrentStateLabel(item, t)}
+                          </span>
+                        </td>
+                        <td className={styles.monoCell}>
+                          {item.statusCode === null ? '--' : item.statusCode}
+                        </td>
+                        <td className={styles.monoCell}>{formatPercent(item.usedPercent)}</td>
+                        <td>
+                          <span className={`${styles.actionBadge} ${actionToneClass[item.action]}`}>
+                            {formatActionLabel(item.action, t)}
+                          </span>
+                        </td>
+                        <td>
+                          <Button
+                            size="sm"
+                            variant={item.action === 'delete' ? 'danger' : 'secondary'}
+                            onClick={() => handleExecuteSingle(item)}
+                            disabled={isInspectionInFlight || executing}
+                          >
+                            {formatActionLabel(item.action, t)}
+                          </Button>
+                        </td>
+                      </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={8}>
-                        <div className={styles.emptyBlockSmall}>{t('monitoring.codex_inspection_no_pending_actions')}</div>
+                      <td colSpan={6}>
+                        <div className={styles.emptyBlockSmall}>
+                          {actionableResults.length === 0
+                            ? t('monitoring.codex_inspection_no_pending_actions')
+                            : t('monitoring.codex_inspection_no_pending_actions')}
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -892,7 +1066,68 @@ export function CodexInspectionPage() {
         ) : (
           <div className={styles.emptyBlock}>{t('monitoring.codex_inspection_empty')}</div>
         )}
-      </Card>
+      </Panel>
+
+      <Panel
+        title={t('monitoring.codex_inspection_logs_title')}
+        subtitle={t('monitoring.codex_inspection_logs_desc')}
+        extra={
+          <div className={styles.logActions}>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={handleJumpToLatest}
+              disabled={logs.length === 0}
+              aria-label={t('monitoring.codex_inspection_logs_jump_latest')}
+              title={t('monitoring.codex_inspection_logs_jump_latest')}
+            >
+              <IconRefreshCw size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={handleClearLogs}
+              disabled={logs.length === 0}
+              aria-label={t('monitoring.codex_inspection_logs_clear')}
+              title={t('monitoring.codex_inspection_logs_clear')}
+            >
+              <IconTrash2 size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles.foldButton}
+              onClick={() => setLogsCollapsed((previous) => !previous)}
+              disabled={logs.length === 0}
+            >
+              {logsCollapsed ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
+              <span>
+                {logsCollapsed
+                  ? t('monitoring.codex_inspection_expand_logs')
+                  : t('monitoring.codex_inspection_fold_logs')}
+              </span>
+            </button>
+          </div>
+        }
+      >
+        {!logsCollapsed ? (
+          <div ref={logListRef} className={styles.logList}>
+            {logs.length > 0 ? (
+              logs.map((entry) => (
+                <div key={entry.id} className={`${styles.logRow} ${levelClassMap[entry.level]}`}>
+                  <span className={styles.logTime}>{formatTimestamp(entry.timestamp, i18n.language)}</span>
+                  <span className={styles.logMessage}>{entry.message}</span>
+                </div>
+              ))
+            ) : (
+              <div className={styles.emptyBlockSmall}>{t('monitoring.codex_inspection_logs_empty')}</div>
+            )}
+          </div>
+        ) : (
+          <div className={styles.logCollapsedBar}>
+            <span>{t('monitoring.codex_inspection_logs_collapsed', { count: logs.length })}</span>
+          </div>
+        )}
+      </Panel>
 
       <Modal
         open={isSettingsModalOpen}
@@ -901,102 +1136,126 @@ export function CodexInspectionPage() {
         width={920}
         className={styles.settingsModal}
       >
-        {/*<div className={styles.settingsIntro}>*/}
-        {/*  <strong>{t('monitoring.codex_inspection_settings_desc')}</strong>*/}
-        {/*</div>*/}
+        <div className={styles.settingsBody}>
+          <section className={styles.settingsSection}>
+            <header className={styles.settingsSectionHeader}>
+              <span>{t('monitoring.codex_inspection_settings_group_strategy')}</span>
+            </header>
+            <div className={styles.settingsGrid}>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_target_type_label')}
+                  value={settingsDraft.targetType}
+                  onChange={(event) => handleSettingsDraftChange('targetType', event.target.value)}
+                  placeholder={DEFAULT_CODEX_INSPECTION_SETTINGS.targetType}
+                />
+              </div>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_used_percent_threshold_label')}
+                  hint={t('monitoring.codex_inspection_settings_threshold_hint')}
+                  type="number"
+                  value={settingsDraft.usedPercentThreshold}
+                  onChange={(event) => handleSettingsDraftChange('usedPercentThreshold', event.target.value)}
+                  min={0}
+                  max={100}
+                  step={0.1}
+                />
+              </div>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_sample_size_label')}
+                  hint={t('monitoring.codex_inspection_settings_sample_size_hint')}
+                  type="number"
+                  value={settingsDraft.sampleSize}
+                  onChange={(event) => handleSettingsDraftChange('sampleSize', event.target.value)}
+                  min={0}
+                  step={1}
+                />
+              </div>
+            </div>
+          </section>
 
-        <div className={styles.settingsGrid}>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_target_type_label')}
-              value={settingsDraft.targetType}
-              onChange={(event) => handleSettingsDraftChange('targetType', event.target.value)}
-              placeholder={DEFAULT_CODEX_INSPECTION_SETTINGS.targetType}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_workers_label')}
-              type="number"
-              value={settingsDraft.workers}
-              onChange={(event) => handleSettingsDraftChange('workers', event.target.value)}
-              min={1}
-              step={1}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_delete_workers_label')}
-              type="number"
-              value={settingsDraft.deleteWorkers}
-              onChange={(event) => handleSettingsDraftChange('deleteWorkers', event.target.value)}
-              min={1}
-              step={1}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_timeout_label')}
-              type="number"
-              value={settingsDraft.timeout}
-              onChange={(event) => handleSettingsDraftChange('timeout', event.target.value)}
-              min={1}
-              step={100}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_retries_label')}
-              type="number"
-              value={settingsDraft.retries}
-              onChange={(event) => handleSettingsDraftChange('retries', event.target.value)}
-              min={0}
-              step={1}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_used_percent_threshold_label')}
-              hint={t('monitoring.codex_inspection_settings_threshold_hint')}
-              type="number"
-              value={settingsDraft.usedPercentThreshold}
-              onChange={(event) => handleSettingsDraftChange('usedPercentThreshold', event.target.value)}
-              min={0}
-              max={100}
-              step={0.1}
-            />
-          </div>
-          <div className={styles.settingsField}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_sample_size_label')}
-              hint={t('monitoring.codex_inspection_settings_sample_size_hint')}
-              type="number"
-              value={settingsDraft.sampleSize}
-              onChange={(event) => handleSettingsDraftChange('sampleSize', event.target.value)}
-              min={0}
-              step={1}
-            />
-          </div>
-          <div className={`${styles.settingsField} ${styles.settingsFieldWide} ${styles.settingsToggleField}`}>
-            <ToggleSwitch
-              checked={settingsDraft.autoExecuteActions}
-              onChange={handleAutoExecuteChange}
-              label={t('monitoring.codex_inspection_settings_auto_execute_actions_label')}
-              ariaLabel={t('monitoring.codex_inspection_settings_auto_execute_actions_label')}
-              labelPosition="left"
-            />
-            <span className={styles.settingsHint}>
-              {t('monitoring.codex_inspection_settings_auto_execute_actions_hint')}
-            </span>
-          </div>
-          <div className={`${styles.settingsField} ${styles.settingsFieldWide}`}>
-            <Input
-              label={t('monitoring.codex_inspection_settings_user_agent_label')}
-              value={settingsDraft.userAgent}
-              onChange={(event) => handleSettingsDraftChange('userAgent', event.target.value)}
-              placeholder={DEFAULT_CODEX_INSPECTION_SETTINGS.userAgent}
-            />
-          </div>
+          <section className={styles.settingsSection}>
+            <header className={styles.settingsSectionHeader}>
+              <span>{t('monitoring.codex_inspection_settings_group_concurrency')}</span>
+            </header>
+            <div className={styles.settingsGrid}>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_workers_label')}
+                  type="number"
+                  value={settingsDraft.workers}
+                  onChange={(event) => handleSettingsDraftChange('workers', event.target.value)}
+                  min={1}
+                  step={1}
+                />
+              </div>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_delete_workers_label')}
+                  type="number"
+                  value={settingsDraft.deleteWorkers}
+                  onChange={(event) => handleSettingsDraftChange('deleteWorkers', event.target.value)}
+                  min={1}
+                  step={1}
+                />
+              </div>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_timeout_label')}
+                  type="number"
+                  value={settingsDraft.timeout}
+                  onChange={(event) => handleSettingsDraftChange('timeout', event.target.value)}
+                  min={1}
+                  step={100}
+                />
+              </div>
+              <div className={styles.settingsField}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_retries_label')}
+                  type="number"
+                  value={settingsDraft.retries}
+                  onChange={(event) => handleSettingsDraftChange('retries', event.target.value)}
+                  min={0}
+                  step={1}
+                />
+              </div>
+              <div className={`${styles.settingsField} ${styles.settingsFieldWide}`}>
+                <Input
+                  label={t('monitoring.codex_inspection_settings_user_agent_label')}
+                  value={settingsDraft.userAgent}
+                  onChange={(event) => handleSettingsDraftChange('userAgent', event.target.value)}
+                  placeholder={DEFAULT_CODEX_INSPECTION_SETTINGS.userAgent}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className={styles.settingsSection}>
+            <header className={styles.settingsSectionHeader}>
+              <span>{t('monitoring.codex_inspection_settings_group_auto')}</span>
+            </header>
+            <div className={styles.settingsAutoCard}>
+              <div className={styles.settingsAutoToggle}>
+                <ToggleSwitch
+                  checked={settingsDraft.autoExecuteActions}
+                  onChange={handleAutoExecuteChange}
+                  label={t('monitoring.codex_inspection_settings_auto_execute_actions_label')}
+                  ariaLabel={t('monitoring.codex_inspection_settings_auto_execute_actions_label')}
+                  labelPosition="left"
+                />
+              </div>
+              <p className={styles.settingsAutoHint}>
+                {t('monitoring.codex_inspection_settings_auto_execute_actions_hint')}
+              </p>
+              {settingsDraft.autoExecuteActions ? (
+                <p className={styles.settingsAutoWarning}>
+                  {t('monitoring.codex_inspection_settings_auto_execute_warning')}
+                </p>
+              ) : null}
+            </div>
+          </section>
         </div>
 
         <div className={styles.settingsActionsBar}>

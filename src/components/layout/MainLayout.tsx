@@ -480,27 +480,7 @@ export function MainLayout() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
-      <div className="top-gradient-blur" aria-hidden="true" />
-
       <header className="main-header" ref={headerRef}>
-        <button
-          type="button"
-          className="sidebar-toggle-floating"
-          onClick={() => setSidebarCollapsed((prev) => !prev)}
-          title={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-          aria-label={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-        >
-          {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
-        </button>
-
         <div className="mobile-sidebar-actions">
           <Button
             className="mobile-menu-btn"
@@ -650,8 +630,27 @@ export function MainLayout() {
           className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}
         >
           <div className="sidebar-brand" title={fullBrandName}>
-            <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
-            {showSidebarLabels && <span className="sidebar-brand-title">{abbrBrandName}</span>}
+            <div className="sidebar-brand-main">
+              <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
+              {showSidebarLabels && <span className="sidebar-brand-title">{abbrBrandName}</span>}
+            </div>
+            <button
+              type="button"
+              className="sidebar-collapse-inline"
+              onClick={() => setSidebarCollapsed((prev) => !prev)}
+              title={
+                sidebarCollapsed
+                  ? t('sidebar.expand', { defaultValue: '展开' })
+                  : t('sidebar.collapse', { defaultValue: '收起' })
+              }
+              aria-label={
+                sidebarCollapsed
+                  ? t('sidebar.expand', { defaultValue: '展开' })
+                  : t('sidebar.collapse', { defaultValue: '收起' })
+              }
+            >
+              {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
+            </button>
           </div>
 
           <div className="nav-section">

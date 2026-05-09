@@ -181,8 +181,9 @@ export function VisualConfigEditor({
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.isCurrentLayer : true;
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const isFloatingSidebar = useMediaQuery('(min-width: 1025px)');
+  const isFloatingSidebar = useMediaQuery('(min-width: 1281px)');
   const shouldRenderFloatingSidebar = !isMobile && isFloatingSidebar && isCurrentLayer;
+  const shouldRenderCompactSectionNav = !shouldRenderFloatingSidebar;
   const routingStrategyLabelId = useId();
   const routingStrategyHintId = `${routingStrategyLabelId}-hint`;
   const keepaliveInputId = useId();
@@ -209,6 +210,10 @@ export function VisualConfigEditor({
 
   const portError = getValidationMessage(t, validationErrors?.port);
   const logsMaxSizeError = getValidationMessage(t, validationErrors?.logsMaxTotalSizeMb);
+  const redisUsageQueueRetentionError = getValidationMessage(
+    t,
+    validationErrors?.redisUsageQueueRetentionSeconds
+  );
   const requestRetryError = getValidationMessage(t, validationErrors?.requestRetry);
   const maxRetryCredentialsError = getValidationMessage(t, validationErrors?.maxRetryCredentials);
   const maxRetryIntervalError = getValidationMessage(t, validationErrors?.maxRetryInterval);
@@ -288,7 +293,7 @@ export function VisualConfigEditor({
         title: t('config_management.visual.sections.system.title'),
         description: t('config_management.visual.sections.system.description'),
         icon: IconDiamond,
-        errorCount: countErrors(['logsMaxTotalSizeMb']),
+        errorCount: countErrors(['logsMaxTotalSizeMb', 'redisUsageQueueRetentionSeconds']),
       },
       {
         id: 'network',
@@ -326,13 +331,6 @@ export function VisualConfigEditor({
     [countErrors, hasPayloadValidationErrors, t]
   );
 
-  const hasValidationIssues =
-    sections.some((section) => section.errorCount > 0) || hasPayloadValidationErrors;
-  const focusSections = useMemo(
-    () => sections.filter((section) => ['server', 'network', 'payload'].includes(section.id)),
-    [sections]
-  );
-
   useEffect(() => {
     if (!isCurrentLayer) return undefined;
     if (typeof IntersectionObserver === 'undefined') return undefined;
@@ -361,7 +359,7 @@ export function VisualConfigEditor({
   }, [isCurrentLayer, sections]);
 
   useEffect(() => {
-    if (!isCurrentLayer || !isMobile) return;
+    if (!isCurrentLayer || !shouldRenderCompactSectionNav) return;
     const scroller = mobileNavScrollerRef.current;
     const button = mobileNavButtonRefs.current[activeSectionId];
     if (!scroller || !button) return;
@@ -379,7 +377,7 @@ export function VisualConfigEditor({
       left: targetLeft,
       behavior: 'smooth',
     });
-  }, [activeSectionId, isCurrentLayer, isMobile]);
+  }, [activeSectionId, isCurrentLayer, shouldRenderCompactSectionNav]);
 
   const handleSectionJump = useCallback((sectionId: VisualSectionId) => {
     setActiveSectionId(sectionId);
@@ -429,7 +427,7 @@ export function VisualConfigEditor({
 
       const anchorRect = anchorElement.getBoundingClientRect();
       const workspaceRect = workspaceElement.getBoundingClientRect();
-      const stickyTop = headerHeight + 20;
+      const stickyTop = headerHeight + 4;
       const viewportPadding = 16;
       const maxTop = workspaceRect.bottom - cachedFloatingHeight;
       const unclampedTop = Math.min(Math.max(anchorRect.top, stickyTop), maxTop);
@@ -483,7 +481,7 @@ export function VisualConfigEditor({
 
   const navContent = (
     <div className={styles.navList}>
-      {sections.map((section, index) => {
+      {sections.map((section) => {
         const Icon = section.icon;
 
         return (
@@ -495,13 +493,12 @@ export function VisualConfigEditor({
             }`}
             onClick={() => handleSectionJump(section.id)}
           >
-            <span className={styles.navIndex}>{String(index + 1).padStart(2, '0')}</span>
+            <span className={styles.navIcon}>
+              <Icon size={14} />
+            </span>
             <span className={styles.navMain}>
               <span className={styles.navHeadingRow}>
                 <span className={styles.navLabelWrap}>
-                  <span className={styles.navIcon}>
-                    <Icon size={14} />
-                  </span>
                   <span className={styles.navLabel}>{section.title}</span>
                 </span>
                 {section.errorCount > 0 ? (
@@ -520,93 +517,50 @@ export function VisualConfigEditor({
 
   return (
     <div className={styles.visualEditor}>
-      <div className={styles.overview}>
-        <div className={styles.overviewHeader}>
-          <div className={styles.overviewMeta}>
-            <span className={styles.overviewPill}>
-              {t('config_management.visual.quick_jump', { defaultValue: '快速跳转' })}
-            </span>
-            {hasValidationIssues ? (
-              <span className={`${styles.overviewPill} ${styles.overviewPillWarning}`}>
-                {t('config_management.visual.validation.validation_blocked')}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className={styles.overviewFocusList}>
-          {focusSections.map((section) => {
-            const Icon = section.icon;
-
-            return (
-              <button
-                key={section.id}
-                type="button"
-                className={`${styles.overviewFocusLink} ${
-                  activeSectionId === section.id ? styles.overviewFocusLinkActive : ''
-                }`}
-                onClick={() => handleSectionJump(section.id)}
-              >
-                <span className={styles.focusIcon}>
-                  <Icon size={16} />
-                </span>
-                <span className={styles.focusCopy}>
-                  <span className={styles.focusTitle}>{section.title}</span>
-                  <span className={styles.focusDescription}>{section.description}</span>
-                </span>
-                {section.errorCount > 0 ? (
-                  <span className={styles.navBadge} aria-hidden="true">
-                    {section.errorCount}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div ref={workspaceRef} className={styles.workspace}>
-        {isMobile ? (
+        {shouldRenderCompactSectionNav ? (
           <div className={styles.mobileSectionNav}>
             <div
               ref={mobileNavScrollerRef}
               className={styles.mobileSectionNavScroller}
               aria-label={t('config_management.visual.quick_jump', { defaultValue: '快速跳转' })}
             >
-              {sections.map((section, index) => (
-                <button
-                  key={section.id}
-                  ref={(node) => {
-                    mobileNavButtonRefs.current[section.id] = node;
-                  }}
-                  type="button"
-                  className={`${styles.mobileSectionNavButton} ${
-                    activeSectionId === section.id ? styles.mobileSectionNavButtonActive : ''
-                  }`}
-                  onClick={() => handleSectionJump(section.id)}
-                >
-                  <span className={styles.mobileSectionNavIndex}>
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <span className={styles.mobileSectionNavLabel}>{section.title}</span>
-                  {section.errorCount > 0 ? (
-                    <span className={styles.mobileSectionNavBadge} aria-hidden="true">
-                      {section.errorCount}
+              {sections.map((section) => {
+                const Icon = section.icon;
+
+                return (
+                  <button
+                    key={section.id}
+                    ref={(node) => {
+                      mobileNavButtonRefs.current[section.id] = node;
+                    }}
+                    type="button"
+                    className={`${styles.mobileSectionNavButton} ${
+                      activeSectionId === section.id ? styles.mobileSectionNavButtonActive : ''
+                    }`}
+                    onClick={() => handleSectionJump(section.id)}
+                  >
+                    <span className={styles.mobileSectionNavIcon}>
+                      <Icon size={13} />
                     </span>
-                  ) : null}
-                </button>
-              ))}
+                    <span className={styles.mobileSectionNavLabel}>{section.title}</span>
+                    {section.errorCount > 0 ? (
+                      <span className={styles.mobileSectionNavBadge} aria-hidden="true">
+                        {section.errorCount}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ) : null}
 
-        <aside ref={sidebarAnchorRef} className={styles.sidebar}>
-          {isFloatingSidebar ? (
+        {shouldRenderFloatingSidebar ? (
+          <aside ref={sidebarAnchorRef} className={styles.sidebar}>
             <div className={styles.sidebarPlaceholder} aria-hidden="true" />
-          ) : (
-            <div className={styles.sidebarRail}>{navContent}</div>
-          )}
-        </aside>
+          </aside>
+        ) : null}
 
         <div className={styles.sections}>
           <ConfigSection
@@ -614,7 +568,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.server = node;
             }}
-            indexLabel="01"
             icon={<IconSettings size={16} />}
             title={t('config_management.visual.sections.server.title')}
             description={t('config_management.visual.sections.server.description')}
@@ -644,7 +597,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.tls = node;
             }}
-            indexLabel="02"
             icon={<IconShield size={16} />}
             title={t('config_management.visual.sections.tls.title')}
             description={t('config_management.visual.sections.tls.description')}
@@ -687,7 +639,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.remote = node;
             }}
-            indexLabel="03"
             icon={<IconSatellite size={16} />}
             title={t('config_management.visual.sections.remote.title')}
             description={t('config_management.visual.sections.remote.description')}
@@ -732,7 +683,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.auth = node;
             }}
-            indexLabel="04"
             icon={<IconKey size={16} />}
             title={t('config_management.visual.sections.auth.title')}
             description={t('config_management.visual.sections.auth.description')}
@@ -761,7 +711,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.system = node;
             }}
-            indexLabel="05"
             icon={<IconDiamond size={16} />}
             title={t('config_management.visual.sections.system.title')}
             description={t('config_management.visual.sections.system.description')}
@@ -783,6 +732,15 @@ export function VisualConfigEditor({
                   onChange={(commercialMode) => onChange({ commercialMode })}
                 />
                 <ToggleRow
+                  title={t('config_management.visual.sections.system.usage_statistics_enabled')}
+                  description={t(
+                    'config_management.visual.sections.system.usage_statistics_enabled_desc'
+                  )}
+                  checked={values.usageStatisticsEnabled}
+                  disabled={disabled}
+                  onChange={(usageStatisticsEnabled) => onChange({ usageStatisticsEnabled })}
+                />
+                <ToggleRow
                   title={t('config_management.visual.sections.system.logging_to_file')}
                   description={t('config_management.visual.sections.system.logging_to_file_desc')}
                   checked={values.loggingToFile}
@@ -801,6 +759,22 @@ export function VisualConfigEditor({
                   disabled={disabled}
                   error={logsMaxSizeError}
                 />
+                <Input
+                  label={t('config_management.visual.sections.system.redis_usage_queue_retention')}
+                  type="number"
+                  min="0"
+                  max="3600"
+                  placeholder="60"
+                  value={values.redisUsageQueueRetentionSeconds}
+                  onChange={(e) =>
+                    onChange({ redisUsageQueueRetentionSeconds: e.target.value })
+                  }
+                  disabled={disabled}
+                  hint={t(
+                    'config_management.visual.sections.system.redis_usage_queue_retention_hint'
+                  )}
+                  error={redisUsageQueueRetentionError}
+                />
               </SectionGrid>
             </SectionStack>
           </ConfigSection>
@@ -810,7 +784,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.network = node;
             }}
-            indexLabel="06"
             icon={<IconTrendingUp size={16} />}
             title={t('config_management.visual.sections.network.title')}
             description={t('config_management.visual.sections.network.description')}
@@ -922,7 +895,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.quota = node;
             }}
-            indexLabel="07"
             icon={<IconTimer size={16} />}
             title={t('config_management.visual.sections.quota.title')}
             description={t('config_management.visual.sections.quota.description')}
@@ -959,7 +931,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.streaming = node;
             }}
-            indexLabel="08"
             icon={<IconSatellite size={16} />}
             title={t('config_management.visual.sections.streaming.title')}
             description={t('config_management.visual.sections.streaming.description')}
@@ -1060,7 +1031,6 @@ export function VisualConfigEditor({
             ref={(node) => {
               sectionRefs.current.payload = node;
             }}
-            indexLabel="09"
             icon={<IconCode size={16} />}
             title={t('config_management.visual.sections.payload.title')}
             description={t('config_management.visual.sections.payload.description')}

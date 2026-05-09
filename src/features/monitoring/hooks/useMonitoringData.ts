@@ -36,23 +36,52 @@ const startOfTodayMs = (nowMs: number) => {
   return now.getTime();
 };
 
-const getRangeStartMs = (range: MonitoringTimeRange, nowMs: number) => {
+const isValidCustomTimeRange = (
+  range: MonitoringCustomTimeRange | null | undefined
+): range is MonitoringCustomTimeRange =>
+  Boolean(
+    range &&
+      Number.isFinite(range.startMs) &&
+      Number.isFinite(range.endMs) &&
+      range.startMs <= range.endMs
+  );
+
+const getRangeBounds = (
+  range: MonitoringTimeRange,
+  nowMs: number,
+  customRange?: MonitoringCustomTimeRange | null
+) => {
+  if (range === 'custom') {
+    return isValidCustomTimeRange(customRange)
+      ? { startMs: customRange.startMs, endMs: customRange.endMs }
+      : null;
+  }
+
   const todayStart = startOfTodayMs(nowMs);
 
   switch (range) {
     case 'today':
-      return todayStart;
+      return { startMs: todayStart, endMs: nowMs };
     case '7d':
-      return todayStart - 6 * 24 * 60 * 60 * 1000;
+      return { startMs: todayStart - 6 * 24 * 60 * 60 * 1000, endMs: nowMs };
     case '14d':
-      return todayStart - 13 * 24 * 60 * 60 * 1000;
+      return { startMs: todayStart - 13 * 24 * 60 * 60 * 1000, endMs: nowMs };
     case '30d':
-      return todayStart - 29 * 24 * 60 * 60 * 1000;
+      return { startMs: todayStart - 29 * 24 * 60 * 60 * 1000, endMs: nowMs };
     case 'all':
     default:
-      return Number.NEGATIVE_INFINITY;
+      return { startMs: Number.NEGATIVE_INFINITY, endMs: nowMs };
   }
 };
+
+const shouldUseHourlyTimeline = (
+  range: MonitoringTimeRange,
+  customRange?: MonitoringCustomTimeRange | null
+) =>
+  range === 'today' ||
+  (range === 'custom' &&
+    isValidCustomTimeRange(customRange) &&
+    buildLocalDayKey(customRange.startMs) === buildLocalDayKey(customRange.endMs));
 
 const maskEmailLike = (value: string) => {
   const trimmed = value.trim();
@@ -119,6 +148,24 @@ const buildSearchText = (...parts: Array<string | number | boolean | null | unde
 const shouldIncludeInStats = (row: Pick<MonitoringEventRow, 'failed' | 'inputTokens' | 'outputTokens'>) =>
   row.failed || row.inputTokens > 0 || row.outputTokens > 0;
 
+const isEffectiveLabel = (value: string) => {
+  const trimmed = value.trim();
+  return Boolean(trimmed) && trimmed !== '-';
+};
+
+const looksLikeMaskedUsageSource = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed.startsWith('m:') || trimmed.startsWith('k:');
+};
+
+const resolveAccountDisplayName = (account: string, channels: Iterable<string>) => {
+  const channelLabels = Array.from(new Set(Array.from(channels).filter(isEffectiveLabel)));
+  if (looksLikeMaskedUsageSource(account) && channelLabels.length === 1) {
+    return channelLabels[0];
+  }
+  return account || channelLabels[0] || '-';
+};
+
 type MonitoringChannelMeta = {
   key: string;
   name: string;
@@ -142,7 +189,12 @@ type MonitoringAuthMeta = {
   updatedAt: string;
 };
 
-export type MonitoringTimeRange = 'today' | '7d' | '14d' | '30d' | 'all';
+export type MonitoringTimeRange = 'today' | '7d' | '14d' | '30d' | 'all' | 'custom';
+
+export type MonitoringCustomTimeRange = {
+  startMs: number;
+  endMs: number;
+};
 
 export type MonitoringStatusTone = 'good' | 'warn' | 'bad';
 
@@ -323,6 +375,7 @@ export type MonitoringAccountModelSpendRow = {
 export type MonitoringAccountRow = {
   id: string;
   account: string;
+  displayAccount: string;
   accountMasked: string;
   authLabels: string[];
   authIndices: string[];
@@ -384,6 +437,7 @@ export interface UseMonitoringDataParams {
   config: Config | null | undefined;
   modelPrices: Record<string, ModelPrice>;
   timeRange: MonitoringTimeRange;
+  customTimeRange?: MonitoringCustomTimeRange | null;
   searchQuery: string;
 }
 
@@ -496,14 +550,16 @@ const normalizeAuthMeta = (entry: AuthFileItem): MonitoringAuthMeta | null => {
 const buildRangeFilteredRows = (
   rows: MonitoringEventRow[],
   timeRange: MonitoringTimeRange,
+  customTimeRange: MonitoringCustomTimeRange | null | undefined,
   searchQuery: string
 ) => {
   const nowMs = Date.now();
-  const startMs = getRangeStartMs(timeRange, nowMs);
+  const bounds = getRangeBounds(timeRange, nowMs, customTimeRange);
   const normalizedQuery = searchQuery.trim().toLowerCase();
+  if (!bounds) return [];
 
   return rows.filter((row) => {
-    if (row.timestampMs > nowMs || row.timestampMs < startMs) {
+    if (row.timestampMs < bounds.startMs || row.timestampMs > bounds.endMs) {
       return false;
     }
 
@@ -517,9 +573,10 @@ const buildRangeFilteredRows = (
 
 const buildTimeline = (
   rows: MonitoringEventRow[],
-  timeRange: MonitoringTimeRange
+  timeRange: MonitoringTimeRange,
+  customTimeRange?: MonitoringCustomTimeRange | null
 ): { granularity: 'hour' | 'day'; points: MonitoringTimelinePoint[] } => {
-  if (timeRange === 'today') {
+  if (shouldUseHourlyTimeline(timeRange, customTimeRange)) {
     const map = new Map<string, MonitoringTimelinePoint>();
 
     for (let hour = 0; hour < 24; hour += 1) {
@@ -763,32 +820,36 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
   });
 
   return Array.from(grouped.values())
-    .map((item) => ({
-      id: item.id,
-      account: item.account,
-      accountMasked: item.accountMasked,
-      authLabels: Array.from(item.authLabels).sort(),
-      authIndices: Array.from(item.authIndices).sort(),
-      channels: Array.from(item.channels).sort(),
-      totalCalls: item.totalCalls,
-      successCalls: item.successCalls,
-      failureCalls: item.failureCalls,
-      successRate: item.totalCalls > 0 ? item.successCalls / item.totalCalls : 1,
-      inputTokens: item.inputTokens,
-      outputTokens: item.outputTokens,
-      cachedTokens: item.cachedTokens,
-      totalTokens: item.totalTokens,
-      totalCost: item.totalCost,
-      averageLatencyMs: item.latencyCount > 0 ? item.latencySum / item.latencyCount : null,
-      lastSeenAt: item.lastSeenAt,
-      recentPattern: buildRecentPattern(item.rows),
-      models: Array.from(item.modelMap.values())
-        .map((model) => ({
-          ...model,
-          successRate: model.totalCalls > 0 ? model.successCalls / model.totalCalls : 1,
-        }))
-        .sort((left, right) => right.totalCost - left.totalCost || right.totalCalls - left.totalCalls),
-    }))
+    .map((item) => {
+      const channels = Array.from(item.channels).sort();
+      return {
+        id: item.id,
+        account: item.account,
+        displayAccount: resolveAccountDisplayName(item.account, channels),
+        accountMasked: item.accountMasked,
+        authLabels: Array.from(item.authLabels).sort(),
+        authIndices: Array.from(item.authIndices).sort(),
+        channels,
+        totalCalls: item.totalCalls,
+        successCalls: item.successCalls,
+        failureCalls: item.failureCalls,
+        successRate: item.totalCalls > 0 ? item.successCalls / item.totalCalls : 1,
+        inputTokens: item.inputTokens,
+        outputTokens: item.outputTokens,
+        cachedTokens: item.cachedTokens,
+        totalTokens: item.totalTokens,
+        totalCost: item.totalCost,
+        averageLatencyMs: item.latencyCount > 0 ? item.latencySum / item.latencyCount : null,
+        lastSeenAt: item.lastSeenAt,
+        recentPattern: buildRecentPattern(item.rows),
+        models: Array.from(item.modelMap.values())
+          .map((model) => ({
+            ...model,
+            successRate: model.totalCalls > 0 ? model.successCalls / model.totalCalls : 1,
+          }))
+          .sort((left, right) => right.totalCost - left.totalCost || right.totalCalls - left.totalCalls),
+      };
+    })
     .sort(
       (left, right) =>
         right.lastSeenAt - left.lastSeenAt ||
@@ -1416,6 +1477,7 @@ export function useMonitoringData({
   config,
   modelPrices,
   timeRange,
+  customTimeRange,
   searchQuery,
 }: UseMonitoringDataParams): UseMonitoringDataReturn {
   const [authFiles, setAuthFiles] = useState<AuthFileItem[]>([]);
@@ -1510,13 +1572,16 @@ export function useMonitoringData({
   }, [authFileMap, authMetaMap, channelByAuthIndex, modelPrices, sourceInfoMap, usage]);
 
   const filteredRows = useMemo(
-    () => buildRangeFilteredRows(allRows, timeRange, searchQuery),
-    [allRows, searchQuery, timeRange]
+    () => buildRangeFilteredRows(allRows, timeRange, customTimeRange, searchQuery),
+    [allRows, customTimeRange, searchQuery, timeRange]
   );
   const statsRows = useMemo(() => filteredRows.filter(shouldIncludeInStats), [filteredRows]);
 
   const summary = useMemo(() => buildMonitoringSummary(statsRows), [statsRows]);
-  const timelineData = useMemo(() => buildTimeline(statsRows, timeRange), [statsRows, timeRange]);
+  const timelineData = useMemo(
+    () => buildTimeline(statsRows, timeRange, customTimeRange),
+    [customTimeRange, statsRows, timeRange]
+  );
   const hourlyDistribution = useMemo(() => buildHourlyDistribution(statsRows), [statsRows]);
   const modelShareRows = useMemo(() => buildModelShareRows(statsRows), [statsRows]);
   const channelRows = useMemo(() => buildChannelRows(statsRows), [statsRows]);

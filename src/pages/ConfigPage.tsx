@@ -500,10 +500,6 @@ export function ConfigPage() {
     </div>
   );
 
-  const pageEyebrow =
-    activeTab === 'visual'
-      ? t('config_management.tabs.visual', { defaultValue: '可视化编辑' })
-      : t('config_management.tabs.source', { defaultValue: '源文件编辑' });
   const pageDescription =
     activeTab === 'visual'
       ? t('config_management.visual.notice')
@@ -512,14 +508,12 @@ export function ConfigPage() {
   return (
     <div className={styles.container}>
       <div className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
-          <span className={styles.pageEyebrow}>{pageEyebrow}</span>
-          <h1 className={styles.pageTitle}>{t('config_management.title')}</h1>
-          <p className={styles.description}>{pageDescription}</p>
-        </div>
+        <h1 className={styles.pageTitle}>{t('config_management.title')}</h1>
+        <p className={styles.description}>{pageDescription}</p>
+      </div>
 
+      <div className={styles.workspaceShell}>
         <div className={styles.pageMeta}>
-          <div className={`${styles.statusBadge} ${getStatusClass()}`}>{getStatusText()}</div>
           <div className={styles.tabBar}>
             <button
               type="button"
@@ -538,10 +532,9 @@ export function ConfigPage() {
               {t('config_management.tabs.source', { defaultValue: '源代码编辑' })}
             </button>
           </div>
+          <div className={`${styles.statusBadge} ${getStatusClass()}`}>{getStatusText()}</div>
         </div>
-      </div>
 
-      <div className={styles.workspaceShell}>
         <div className={styles.content}>
           {error && <div className="error-box">{error}</div>}
           {!error && visualParseError && (

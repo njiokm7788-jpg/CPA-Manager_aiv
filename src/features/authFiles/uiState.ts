@@ -1,4 +1,4 @@
-export const AUTH_FILES_SORT_MODES = ['default', 'az', 'priority'] as const;
+export const AUTH_FILES_SORT_MODES = ['default', 'name-asc', 'plan-desc', 'plan-asc'] as const;
 
 export type AuthFilesSortMode = (typeof AUTH_FILES_SORT_MODES)[number];
 
@@ -18,9 +18,19 @@ export type AuthFilesUiState = {
 const AUTH_FILES_UI_STATE_KEY = 'authFilesPage.uiState';
 const AUTH_FILES_COMPACT_MODE_KEY = 'authFilesPage.compactMode';
 const AUTH_FILES_SORT_MODE_SET = new Set<AuthFilesSortMode>(AUTH_FILES_SORT_MODES);
+const LEGACY_AUTH_FILES_SORT_MODE_MAP: Record<string, AuthFilesSortMode> = {
+  az: 'name-asc',
+  priority: 'default',
+};
 
 export const isAuthFilesSortMode = (value: unknown): value is AuthFilesSortMode =>
   typeof value === 'string' && AUTH_FILES_SORT_MODE_SET.has(value as AuthFilesSortMode);
+
+export const normalizeAuthFilesSortMode = (value: unknown): AuthFilesSortMode | null => {
+  if (isAuthFilesSortMode(value)) return value;
+  if (typeof value !== 'string') return null;
+  return LEGACY_AUTH_FILES_SORT_MODE_MAP[value] ?? null;
+};
 
 const readAuthFilesUiStateFromStorage = (
   storage: Pick<Storage, 'getItem'> | null | undefined
